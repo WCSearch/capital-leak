@@ -1,25 +1,28 @@
-"""Database connection and configuration"""
+"""Database connection and configuration using Supabase API"""
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from supabase import create_client, Client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv('https://vlbvrhotrlipaoedudys.supabase.co')
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL not found. Create .env file.")
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
-engine = create_engine(DATABASE_URL, pool_size=5, max_overflow=10, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env file")
 
-def get_engine():
-    return engine
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def get_client():
+    """Returns the Supabase client instance"""
+    return supabase
 
 def test_connection():
+    """Test Supabase connection by attempting a simple query"""
     try:
-        conn = engine.connect()
-        conn.close()
-        return True, "Connected"
+        # Try to query a table (will fail gracefully if no tables exist)
+        result = supabase.table('companies').select('count').limit(0).execute()
+        return True, "Connected to Supabase"
     except Exception as e:
         return False, str(e)
