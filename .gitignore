@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.env
+venv/
+data/client_exports/
+*.csv
+*.xlsx
+.DS_Store
+.streamlit/secrets.toml
