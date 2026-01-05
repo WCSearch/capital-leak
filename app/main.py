@@ -7,28 +7,47 @@ import traceback
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
-# Import and initialize database with comprehensive error handling
+# Import and initialize Supabase client with comprehensive error handling
 try:
-    from config.database import get_engine
-    engine = get_engine()
+    from config.database import get_supabase_client
+    supabase = get_supabase_client()
     st.title("💰 Capital Leak Analysis Dashboard")
+except KeyError as e:
+    st.error("❌ Supabase Configuration Error")
+    st.error(f"**Missing Secret:** {str(e)}")
+
+    st.warning("""
+    ### Troubleshooting Steps:
+
+    1. **Check Streamlit secrets** (.streamlit/secrets.toml) contains:
+       ```toml
+       [supabase]
+       url = "your-supabase-url"
+       key = "your-supabase-anon-key"
+       ```
+    2. **In Streamlit Cloud**: Go to App Settings → Secrets and add the Supabase configuration
+    3. **Restart the app** after updating secrets
+
+    ### Where to find your Supabase credentials:
+    - Dashboard: https://supabase.com/dashboard
+    - Settings → API → Project URL and anon/public key
+    """)
+
+    with st.expander("📋 Full Error Details"):
+        st.code(traceback.format_exc())
+
+    st.stop()
 except ImportError as e:
-    st.error("❌ Database Connection Error")
-    st.error(f"**Import Error:** {str(e)}")
+    st.error("❌ Import Error")
+    st.error(f"**Error:** {str(e)}")
     st.error(f"**Python Version:** {sys.version}")
 
     st.warning("""
     ### Troubleshooting Steps:
 
-    1. **Check requirements.txt** contains: `psycopg2-binary>=2.9.9`
-    2. **Verify DATABASE_URL** environment variable is set in Streamlit Cloud
-    3. **Check logs** in Streamlit Cloud dashboard for detailed error messages
-    4. **Restart the app** after updating requirements.txt
-
-    ### Common Solutions:
-    - Make sure you're using `psycopg2-binary` (not `psycopg2`)
-    - Ensure all secrets are properly configured in Streamlit Cloud
-    - Check that the database URL is accessible from Streamlit Cloud
+    1. **Check requirements.txt** contains: `supabase>=2.3.0`
+    2. **Restart the app** after updating requirements.txt
+    3. **Check logs** in Streamlit Cloud dashboard for installation errors
     """)
 
     with st.expander("📋 Full Error Details"):
@@ -46,13 +65,14 @@ except Exception as e:
 
 # Query companies with error handling
 try:
-    companies = pd.read_sql("SELECT company_id, company_name FROM companies", engine)
+    response = supabase.table('companies').select('company_id', 'company_name').execute()
+    companies = pd.DataFrame(response.data)
 except Exception as e:
-    st.error("❌ Failed to fetch companies from database")
+    st.error("❌ Failed to fetch companies from Supabase")
     st.error(f"**Error:** {str(e)}")
     with st.expander("📋 Debug Information"):
         st.code(traceback.format_exc())
-        st.info("Check that the database is accessible and the 'companies' table exists.")
+        st.info("Check that the Supabase connection is configured correctly and the 'companies' table exists.")
     st.stop()
 
 if len(companies) == 0:
@@ -65,7 +85,13 @@ selected = st.selectbox("Select Company", companies['company_id'].tolist(),
 st.header("Cash Conversion Cycle")
 
 try:
-    ccc = pd.read_sql(f"SELECT * FROM ccc_metrics WHERE company_id='{selected}' ORDER BY calculation_date DESC LIMIT 1", engine)
+    response = supabase.table('ccc_metrics')\
+        .select('*')\
+        .eq('company_id', selected)\
+        .order('calculation_date', desc=True)\
+        .limit(1)\
+        .execute()
+    ccc = pd.DataFrame(response.data)
 except Exception as e:
     st.error(f"❌ Failed to fetch CCC metrics for company {selected}")
     st.error(f"**Error:** {str(e)}")
