@@ -11,6 +11,8 @@ Analyzes ERP data to identify capital trapped in working capital:
 CCC = DSO + DIO - DPO (Cash Conversion Cycle)
 
 ## Quick Start
+
+### Local Development
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
@@ -18,6 +20,11 @@ cp .env.example .env
 python scripts/setup_database.py
 streamlit run app/main.py
 ```
+
+### Streamlit Cloud Deployment
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions.
+
+**Quick deploy:** Set main file path to `app/main.py` and add `DATABASE_URL` to secrets.
 
 ## Supported ERPs
 - SAP, Oracle, NetSuite, Microsoft Dynamics
