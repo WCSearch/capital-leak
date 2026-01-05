@@ -2,14 +2,17 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from config.database import get_engine
+from config.database import get_client
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
-engine = get_engine()
+supabase = get_client()
 st.title("💰 Capital Leak Analysis Dashboard")
 
-companies = pd.read_sql("SELECT company_id, company_name FROM companies", engine)
+# Fetch companies using Supabase API
+companies_response = supabase.table('companies').select('company_id, company_name').execute()
+companies_data = companies_response.data
+companies = pd.DataFrame(companies_data) if companies_data else pd.DataFrame()
 
 if len(companies) == 0:
     st.warning("No companies analyzed yet")
@@ -20,7 +23,10 @@ selected = st.selectbox("Select Company", companies['company_id'].tolist(),
 
 st.header("Cash Conversion Cycle")
 
-ccc = pd.read_sql(f"SELECT * FROM ccc_metrics WHERE company_id='{selected}' ORDER BY calculation_date DESC LIMIT 1", engine)
+# Fetch CCC metrics using Supabase API
+ccc_response = supabase.table('ccc_metrics').select('*').eq('company_id', selected).order('calculation_date', desc=True).limit(1).execute()
+ccc_data = ccc_response.data
+ccc = pd.DataFrame(ccc_data) if ccc_data else pd.DataFrame()
 
 if len(ccc) > 0:
     col1, col2, col3, col4 = st.columns(4)
