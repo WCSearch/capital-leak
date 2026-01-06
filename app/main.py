@@ -11,6 +11,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
+# Custom CSS for better interactivity
+st.markdown("""
+<style>
+    /* Make containers look more clickable */
+    .stButton button {
+        transition: all 0.3s ease;
+    }
+    .stButton button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+
+    /* Breadcrumb styling */
+    [data-testid="stMarkdownContainer"] p {
+        font-size: 14px;
+    }
+
+    /* Better spacing for containers */
+    .element-container {
+        margin-bottom: 0.5rem;
+    }
+
+    /* Status badges */
+    .stMarkdown {
+        line-height: 1.6;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Import and initialize Supabase client with comprehensive error handling
 try:
     from config.database import get_supabase_client
@@ -88,6 +117,64 @@ selected = st.selectbox("Select Company", companies['company_id'].tolist(),
 
 st.header("Cash Conversion Cycle")
 
+# Initialize session state for drill-down navigation
+if 'drill_down_state' not in st.session_state:
+    st.session_state.drill_down_state = {
+        'level': 1,
+        'component': None,
+        'functional_area': None,
+        'transaction_id': None
+    }
+
+def reset_drill_down():
+    """Reset drill-down to Level 1"""
+    st.session_state.drill_down_state = {
+        'level': 1,
+        'component': None,
+        'functional_area': None,
+        'transaction_id': None
+    }
+
+def drill_to_component(component_type):
+    """Drill down to Level 2: Component breakdown"""
+    st.session_state.drill_down_state = {
+        'level': 2,
+        'component': component_type,
+        'functional_area': None,
+        'transaction_id': None
+    }
+
+def drill_to_functional_area(component_type, functional_area):
+    """Drill down to Level 3: Transactions in functional area"""
+    st.session_state.drill_down_state = {
+        'level': 3,
+        'component': component_type,
+        'functional_area': functional_area,
+        'transaction_id': None
+    }
+
+def drill_to_transaction(component_type, functional_area, transaction_id):
+    """Drill down to Level 4: Event logs for transaction"""
+    st.session_state.drill_down_state = {
+        'level': 4,
+        'component': component_type,
+        'functional_area': functional_area,
+        'transaction_id': transaction_id
+    }
+
+def back_one_level():
+    """Navigate back one level in drill-down"""
+    current_level = st.session_state.drill_down_state['level']
+    if current_level == 4:
+        st.session_state.drill_down_state['level'] = 3
+        st.session_state.drill_down_state['transaction_id'] = None
+    elif current_level == 3:
+        st.session_state.drill_down_state['level'] = 2
+        st.session_state.drill_down_state['functional_area'] = None
+    elif current_level == 2:
+        reset_drill_down()
+
+# Fetch CCC metrics
 try:
     response = supabase.table('ccc_metrics')\
         .select('*')\
@@ -99,11 +186,308 @@ try:
 except Exception as e:
     st.error(f"❌ Failed to fetch CCC metrics for company {selected}")
     st.error(f"**Error:** {str(e)}")
-    ccc = pd.DataFrame()  # Empty dataframe to prevent further errors
+    ccc = pd.DataFrame()
 
-if len(ccc) > 0:
+if len(ccc) == 0:
+    st.warning("No CCC metrics available for this company")
+    st.stop()
+
+# Breadcrumb navigation
+state = st.session_state.drill_down_state
+breadcrumb_parts = ["🏠 Dashboard"]
+if state['level'] >= 2 and state['component']:
+    breadcrumb_parts.append(f"{state['component']}")
+if state['level'] >= 3 and state['functional_area']:
+    breadcrumb_parts.append(f"{state['functional_area']}")
+if state['level'] >= 4 and state['transaction_id']:
+    breadcrumb_parts.append(f"Transaction Details")
+
+st.markdown(f"**Navigation:** {' > '.join(breadcrumb_parts)}")
+
+# Back button (only show if not at top level)
+if state['level'] > 1:
+    col_back, col_home = st.columns([1, 5])
+    with col_back:
+        if st.button("⬅️ Back"):
+            back_one_level()
+            st.rerun()
+    with col_home:
+        if st.button("🏠 Home"):
+            reset_drill_down()
+            st.rerun()
+    st.divider()
+
+# LEVEL 1: Top-level CCC metrics (clickable cards)
+if state['level'] == 1:
+    st.subheader("Cash Conversion Cycle Overview")
+
+    # Display metrics
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("CCC", f"{ccc['ccc_value'].values[0]:.1f} days")
-    col2.metric("DSO", f"{ccc['dso_value'].values[0]:.1f} days")
-    col3.metric("DIO", f"{ccc['dio_value'].values[0]:.1f} days")
-    col4.metric("DPO", f"{ccc['dpo_value'].values[0]:.1f} days")
+
+    with col1:
+        st.metric("CCC", f"{ccc['ccc_value'].values[0]:.1f} days")
+        st.caption("Cash Conversion Cycle (Total)")
+
+    with col2:
+        st.metric("DSO", f"{ccc['dso_value'].values[0]:.1f} days")
+        if st.button("🔍 Drill Down", key="drill_dso", help="Click to see DSO breakdown"):
+            drill_to_component('DSO')
+            st.rerun()
+
+    with col3:
+        st.metric("DIO", f"{ccc['dio_value'].values[0]:.1f} days")
+        if st.button("🔍 Drill Down", key="drill_dio", help="Click to see DIO breakdown"):
+            drill_to_component('DIO')
+            st.rerun()
+
+    with col4:
+        st.metric("DPO", f"{ccc['dpo_value'].values[0]:.1f} days")
+        if st.button("🔍 Drill Down", key="drill_dpo", help="Click to see DPO breakdown"):
+            drill_to_component('DPO')
+            st.rerun()
+
+    st.info("💡 Click 'Drill Down' on any component to see detailed breakdown by functional area")
+
+# LEVEL 2: Functional area breakdown for selected component
+elif state['level'] == 2:
+    component = state['component']
+    st.subheader(f"{component} Breakdown by Functional Area")
+
+    # Fetch component details
+    try:
+        response = supabase.table('component_details')\
+            .select('*')\
+            .eq('company_id', selected)\
+            .eq('component_type', component)\
+            .execute()
+        component_data = pd.DataFrame(response.data)
+    except Exception as e:
+        st.error(f"❌ Failed to fetch {component} breakdown")
+        st.error(f"**Error:** {str(e)}")
+        component_data = pd.DataFrame()
+
+    if len(component_data) > 0:
+        # Show summary
+        total_amount = component_data['amount'].sum()
+        total_days = component_data['days_contribution'].sum()
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Amount", f"${total_amount:,.2f}")
+        with col2:
+            st.metric("Total Days Impact", f"{total_days:.1f} days")
+
+        st.divider()
+
+        # Sort by days contribution (descending) to show biggest issues first
+        component_data = component_data.sort_values('days_contribution', ascending=False)
+
+        # Display each functional area as a clickable card
+        st.subheader("Functional Areas (Click to see transactions)")
+
+        for idx, row in component_data.iterrows():
+            with st.container():
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+
+                with col1:
+                    st.markdown(f"**{row['functional_area']}**")
+                    st.caption(f"{row['gl_account_name']} ({row['gl_account']})")
+
+                with col2:
+                    st.metric("Amount", f"${row['amount']:,.2f}", label_visibility="collapsed")
+                    st.caption("Amount")
+
+                with col3:
+                    st.metric("Days", f"{row['days_contribution']:.1f}", label_visibility="collapsed")
+                    st.caption("Days Impact")
+
+                with col4:
+                    if st.button("View →", key=f"drill_fa_{row['detail_id']}", help=f"See transactions in {row['functional_area']}"):
+                        drill_to_functional_area(component, row['functional_area'])
+                        st.rerun()
+
+                st.divider()
+    else:
+        st.warning(f"No breakdown data available for {component}")
+
+# LEVEL 3: Transactions within a functional area
+elif state['level'] == 3:
+    component = state['component']
+    functional_area = state['functional_area']
+    st.subheader(f"{component} > {functional_area}")
+    st.markdown("### Transactions")
+
+    # Get GL accounts for this functional area
+    try:
+        gl_response = supabase.table('component_details')\
+            .select('gl_account')\
+            .eq('company_id', selected)\
+            .eq('component_type', component)\
+            .eq('functional_area', functional_area)\
+            .execute()
+        gl_accounts = [row['gl_account'] for row in gl_response.data]
+    except Exception as e:
+        st.error(f"❌ Failed to fetch GL accounts")
+        gl_accounts = []
+
+    # Fetch transactions
+    try:
+        response = supabase.table('transactions')\
+            .select('*')\
+            .eq('company_id', selected)\
+            .eq('component_type', component)\
+            .in_('gl_account', gl_accounts)\
+            .execute()
+        transactions = pd.DataFrame(response.data)
+    except Exception as e:
+        st.error(f"❌ Failed to fetch transactions")
+        st.error(f"**Error:** {str(e)}")
+        transactions = pd.DataFrame()
+
+    if len(transactions) > 0:
+        # Summary metrics
+        total_trans = len(transactions)
+        total_amount = transactions['amount'].sum()
+        avg_days = transactions['days_outstanding'].mean()
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Transactions", f"{total_trans}")
+        with col2:
+            st.metric("Total Amount", f"${total_amount:,.2f}")
+        with col3:
+            st.metric("Avg Days Outstanding", f"{avg_days:.1f} days")
+
+        st.divider()
+
+        # Sort by days outstanding (descending) to show oldest first
+        transactions = transactions.sort_values('days_outstanding', ascending=False)
+
+        # Display transactions as clickable cards
+        st.subheader("Transaction Details (Click to see event history)")
+
+        for idx, row in transactions.iterrows():
+            # Create color coding based on status
+            status_color = {
+                'CREDIT_HOLD': '🔴',
+                'PENDING': '🟡',
+                'APPROVED': '🟢',
+                'PAID': '🔵',
+                'OVERDUE': '🔴'
+            }.get(row['status'], '⚪')
+
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+
+                with col1:
+                    st.markdown(f"**{row['transaction_number']}**")
+                    st.caption(f"Date: {row['transaction_date']}")
+
+                with col2:
+                    st.markdown(f"**{row['customer_vendor']}**")
+                    st.caption("Customer/Vendor")
+
+                with col3:
+                    st.metric("Amount", f"${row['amount']:,.2f}", label_visibility="collapsed")
+                    st.caption("Amount")
+
+                with col4:
+                    st.markdown(f"{status_color} **{row['status']}**")
+                    st.caption(f"{row['days_outstanding']} days old")
+
+                with col5:
+                    if st.button("Events →", key=f"drill_trans_{row['transaction_id']}", help=f"See event log for {row['transaction_number']}"):
+                        drill_to_transaction(component, functional_area, row['transaction_id'])
+                        st.rerun()
+
+                st.divider()
+    else:
+        st.warning(f"No transactions found for {functional_area}")
+
+# LEVEL 4: Event logs for a specific transaction
+elif state['level'] == 4:
+    component = state['component']
+    functional_area = state['functional_area']
+    transaction_id = state['transaction_id']
+
+    # Fetch transaction details
+    try:
+        trans_response = supabase.table('transactions')\
+            .select('*')\
+            .eq('transaction_id', transaction_id)\
+            .execute()
+        trans_data = trans_response.data[0] if trans_response.data else None
+    except Exception as e:
+        st.error(f"❌ Failed to fetch transaction details")
+        trans_data = None
+
+    if trans_data:
+        st.subheader(f"Transaction: {trans_data['transaction_number']}")
+
+        # Transaction summary
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Amount", f"${trans_data['amount']:,.2f}")
+        with col2:
+            st.metric("Status", trans_data['status'])
+        with col3:
+            st.metric("Days Outstanding", f"{trans_data['days_outstanding']}")
+        with col4:
+            st.metric("Customer/Vendor", trans_data['customer_vendor'], label_visibility="collapsed")
+            st.caption("Customer/Vendor")
+
+        st.divider()
+
+        # Fetch event logs
+        try:
+            events_response = supabase.table('event_logs')\
+                .select('*')\
+                .eq('transaction_id', transaction_id)\
+                .order('event_timestamp', desc=False)\
+                .execute()
+            events = pd.DataFrame(events_response.data)
+        except Exception as e:
+            st.error(f"❌ Failed to fetch event logs")
+            st.error(f"**Error:** {str(e)}")
+            events = pd.DataFrame()
+
+        if len(events) > 0:
+            st.subheader(f"Event Timeline ({len(events)} events)")
+
+            # Display events as timeline
+            for idx, event in events.iterrows():
+                event_time = pd.to_datetime(event['event_timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+
+                # Event type icons
+                event_icon = {
+                    'ORDER_CREATED': '📝',
+                    'SHIPPED': '📦',
+                    'CREDIT_CHECK_TRIGGERED': '⚠️',
+                    'APPROVED': '✅',
+                    'REJECTED': '❌',
+                    'SYSTEM_CONFIG_CHANGE': '⚙️',
+                    'PAYMENT_RECEIVED': '💰'
+                }.get(event['event_type'], '📌')
+
+                with st.expander(f"{event_icon} **{event['event_type']}** - {event_time}", expanded=(idx < 3)):
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        st.markdown("**User:**")
+                        st.markdown("**Module:**")
+                        if event['event_data']:
+                            st.markdown("**Data:**")
+                    with col2:
+                        st.markdown(f"{event['user_id']}")
+                        st.markdown(f"{event['module']}")
+                        if event['event_data']:
+                            st.json(event['event_data'])
+
+                    st.markdown(f"**Description:** {event['event_description']}")
+
+            # Analysis tip
+            st.info("💡 **Investigation Tip:** Look for CREDIT_CHECK_TRIGGERED events or SYSTEM_CONFIG_CHANGE events that might explain delays")
+
+        else:
+            st.warning(f"No event logs found for transaction {trans_data['transaction_number']}")
+    else:
+        st.error("Transaction not found")
