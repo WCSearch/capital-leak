@@ -21,6 +21,15 @@ from app.components.trapped_cash_indicator import (
     render_trapped_cash_indicator,
     render_surgical_target
 )
+# Import DSO time-state analysis
+from utils.dso_analysis import (
+    analyze_dso_time_states,
+    get_time_state_summary
+)
+from app.components.dso_time_state import (
+    render_time_state_breakdown,
+    render_time_state_drill_down
+)
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
@@ -136,7 +145,8 @@ if 'drill_down_state' not in st.session_state:
         'level': 1,
         'component': None,
         'functional_area': None,
-        'transaction_id': None
+        'transaction_id': None,
+        'time_state': None  # For DSO time-state drill-down
     }
 
 def reset_drill_down():
@@ -145,7 +155,8 @@ def reset_drill_down():
         'level': 1,
         'component': None,
         'functional_area': None,
-        'transaction_id': None
+        'transaction_id': None,
+        'time_state': None
     }
 
 def drill_to_component(component_type):
@@ -154,7 +165,18 @@ def drill_to_component(component_type):
         'level': 2,
         'component': component_type,
         'functional_area': None,
-        'transaction_id': None
+        'transaction_id': None,
+        'time_state': None
+    }
+
+def drill_to_time_state(component_type, time_state):
+    """Drill down to Level 2.5: Time-state detail (DSO only)"""
+    st.session_state.drill_down_state = {
+        'level': 2.5,
+        'component': component_type,
+        'functional_area': None,
+        'transaction_id': None,
+        'time_state': time_state
     }
 
 def drill_to_functional_area(component_type, functional_area):
@@ -163,7 +185,8 @@ def drill_to_functional_area(component_type, functional_area):
         'level': 3,
         'component': component_type,
         'functional_area': functional_area,
-        'transaction_id': None
+        'transaction_id': None,
+        'time_state': None
     }
 
 def drill_to_transaction(component_type, functional_area, transaction_id):
@@ -172,7 +195,8 @@ def drill_to_transaction(component_type, functional_area, transaction_id):
         'level': 4,
         'component': component_type,
         'functional_area': functional_area,
-        'transaction_id': transaction_id
+        'transaction_id': transaction_id,
+        'time_state': None
     }
 
 def back_one_level():
@@ -184,6 +208,9 @@ def back_one_level():
     elif current_level == 3:
         st.session_state.drill_down_state['level'] = 2
         st.session_state.drill_down_state['functional_area'] = None
+    elif current_level == 2.5:
+        st.session_state.drill_down_state['level'] = 2
+        st.session_state.drill_down_state['time_state'] = None
     elif current_level == 2:
         reset_drill_down()
 
@@ -210,6 +237,13 @@ state = st.session_state.drill_down_state
 breadcrumb_parts = ["🏠 Dashboard"]
 if state['level'] >= 2 and state['component']:
     breadcrumb_parts.append(f"{state['component']}")
+if state['level'] == 2.5 and state['time_state']:
+    # Get time state name from session if available
+    if 'time_state_groups' in st.session_state and state['time_state'] in st.session_state.time_state_groups:
+        state_name = st.session_state.time_state_groups[state['time_state']]['config']['name']
+        breadcrumb_parts.append(f"{state_name}")
+    else:
+        breadcrumb_parts.append("Time State Detail")
 if state['level'] >= 3 and state['functional_area']:
     breadcrumb_parts.append(f"{state['functional_area']}")
 if state['level'] >= 4 and state['transaction_id']:
@@ -308,25 +342,84 @@ if state['level'] == 1:
 # LEVEL 2: Functional area breakdown for selected component
 elif state['level'] == 2:
     component = state['component']
-    st.subheader(f"{component} Breakdown by Functional Area")
 
-    # Get trapped cash analysis to show initial estimate and surgical target
-    try:
-        trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
-        if trapped_analysis:
-            # Get the trapped amount for this component
-            component_lower = component.lower()
-            initial_estimate = trapped_analysis.get(f'{component_lower}_trapped_cash', 0)
+    # FOR DSO: Show diagnostic time-state breakdown
+    if component == 'DSO':
+        st.subheader("DSO Diagnostic Dashboard")
 
-            # Calculate surgical target
-            surgical_target = calculate_surgical_target(supabase, selected, component)
+        # Get trapped cash analysis
+        try:
+            trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
+            if trapped_analysis:
+                initial_estimate = trapped_analysis.get('dso_trapped_cash', 0)
+                st.markdown(f"""
+                    <div style="background-color: #f3f4f6; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+                        <h3>DSO RECOVERY ANALYSIS</h3>
+                        <p><strong>Total Potential Recovery:</strong> ${initial_estimate:,.0f}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            st.warning(f"Unable to load trapped cash analysis: {str(e)}")
 
-            # Render surgical target indicator
-            render_surgical_target(component, initial_estimate, surgical_target)
+        # Fetch DSO transactions and event logs
+        try:
+            trans_response = supabase.table('transactions')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .eq('component_type', 'DSO')\
+                .execute()
+            transactions_df = pd.DataFrame(trans_response.data)
 
-            st.divider()
-    except Exception as e:
-        st.warning(f"Unable to display surgical target: {str(e)}")
+            events_response = supabase.table('event_logs')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .execute()
+            event_logs_df = pd.DataFrame(events_response.data)
+
+            if len(transactions_df) > 0:
+                # Analyze time states
+                time_state_groups = analyze_dso_time_states(transactions_df, event_logs_df)
+                time_state_summary = get_time_state_summary(time_state_groups)
+
+                # Store in session state for drill-down
+                st.session_state.time_state_groups = time_state_groups
+
+                # Render time-state breakdown
+                def on_time_state_drill_down(state_key):
+                    drill_to_time_state('DSO', state_key)
+                    st.rerun()
+
+                render_time_state_breakdown(time_state_summary, on_time_state_drill_down)
+            else:
+                st.warning("No DSO transactions found for analysis")
+
+        except Exception as e:
+            st.error(f"Error analyzing DSO time states: {str(e)}")
+            import traceback
+            with st.expander("Debug Info"):
+                st.code(traceback.format_exc())
+
+    # FOR DIO/DPO: Show traditional functional area breakdown
+    else:
+        st.subheader(f"{component} Breakdown by Functional Area")
+
+        # Get trapped cash analysis to show initial estimate and surgical target
+        try:
+            trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
+            if trapped_analysis:
+                # Get the trapped amount for this component
+                component_lower = component.lower()
+                initial_estimate = trapped_analysis.get(f'{component_lower}_trapped_cash', 0)
+
+                # Calculate surgical target
+                surgical_target = calculate_surgical_target(supabase, selected, component)
+
+                # Render surgical target indicator
+                render_surgical_target(component, initial_estimate, surgical_target)
+
+                st.divider()
+        except Exception as e:
+            st.warning(f"Unable to display surgical target: {str(e)}")
 
     # Fetch component details
     try:
@@ -384,6 +477,31 @@ elif state['level'] == 2:
                 st.divider()
     else:
         st.warning(f"No breakdown data available for {component}")
+
+# LEVEL 2.5: Time-state drill-down (DSO only)
+elif state['level'] == 2.5:
+    component = state['component']
+    time_state = state['time_state']
+
+    # Get time state groups from session state
+    if 'time_state_groups' in st.session_state and time_state in st.session_state.time_state_groups:
+        group = st.session_state.time_state_groups[time_state]
+        state_name = group['config']['name']
+
+        # Convert transactions list to DataFrame
+        transactions_df = pd.DataFrame(group['transactions'])
+
+        # Render drill-down view
+        def on_back():
+            back_one_level()
+
+        render_time_state_drill_down(time_state, state_name, transactions_df, on_back)
+
+    else:
+        st.error("Time state data not found. Please go back and try again.")
+        if st.button("⬅️ Back"):
+            back_one_level()
+            st.rerun()
 
 # LEVEL 3: Transactions within a functional area
 elif state['level'] == 3:
