@@ -5,9 +5,22 @@ import plotly.express as px
 import sys
 import os
 import traceback
+from datetime import datetime
 
 # Add parent directory to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import trapped cash utilities and components
+from utils.trapped_cash import (
+    calculate_trapped_cash,
+    save_trapped_cash_analysis,
+    get_latest_trapped_cash_analysis,
+    calculate_surgical_target
+)
+from app.components.trapped_cash_indicator import (
+    render_trapped_cash_indicator,
+    render_surgical_target
+)
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
@@ -221,6 +234,50 @@ if state['level'] > 1:
 if state['level'] == 1:
     st.subheader("Cash Conversion Cycle Overview")
 
+    # Calculate and display trapped cash indicator
+    try:
+        # Get company revenue
+        company_response = supabase.table('companies')\
+            .select('revenue_annual')\
+            .eq('company_id', selected)\
+            .execute()
+
+        if company_response.data and len(company_response.data) > 0:
+            revenue = company_response.data[0].get('revenue_annual', 0)
+
+            if revenue and revenue > 0:
+                # Calculate trapped cash
+                trapped_cash_result = calculate_trapped_cash(
+                    revenue_annual=float(revenue),
+                    actual_dso=float(ccc['dso_value'].values[0]),
+                    actual_dio=float(ccc['dio_value'].values[0]),
+                    actual_dpo=float(ccc['dpo_value'].values[0])
+                )
+
+                # Save to database
+                save_trapped_cash_analysis(
+                    supabase,
+                    company_id=selected,
+                    analysis_result=trapped_cash_result,
+                    analysis_date=datetime.now().date()
+                )
+
+                # Render the indicator with callback
+                def on_begin_analysis(component):
+                    drill_to_component(component)
+                    st.rerun()
+
+                render_trapped_cash_indicator(
+                    total_trapped=trapped_cash_result['total_trapped_cash'],
+                    targets=trapped_cash_result['targets'],
+                    on_begin_analysis_callback=on_begin_analysis
+                )
+
+                st.divider()
+    except Exception as e:
+        st.warning(f"Unable to calculate trapped cash: {str(e)}")
+        # Continue without trapped cash indicator
+
     # Display metrics
     col1, col2, col3, col4 = st.columns(4)
 
@@ -252,6 +309,24 @@ if state['level'] == 1:
 elif state['level'] == 2:
     component = state['component']
     st.subheader(f"{component} Breakdown by Functional Area")
+
+    # Get trapped cash analysis to show initial estimate and surgical target
+    try:
+        trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
+        if trapped_analysis:
+            # Get the trapped amount for this component
+            component_lower = component.lower()
+            initial_estimate = trapped_analysis.get(f'{component_lower}_trapped_cash', 0)
+
+            # Calculate surgical target
+            surgical_target = calculate_surgical_target(supabase, selected, component)
+
+            # Render surgical target indicator
+            render_surgical_target(component, initial_estimate, surgical_target)
+
+            st.divider()
+    except Exception as e:
+        st.warning(f"Unable to display surgical target: {str(e)}")
 
     # Fetch component details
     try:
