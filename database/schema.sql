@@ -75,3 +75,44 @@ CREATE TABLE cross_module_links (
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE trapped_cash_analysis (
+    analysis_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    company_id UUID REFERENCES companies(company_id) ON DELETE CASCADE,
+    analysis_date DATE NOT NULL,
+
+    -- Totals
+    total_trapped_cash DECIMAL(15,2),
+    total_expected_recovery DECIMAL(15,2),
+
+    -- DSO
+    dso_trapped_cash DECIMAL(15,2),
+    dso_excess_days DECIMAL(10,2),
+    dso_expected_recovery DECIMAL(15,2),
+    dso_priority VARCHAR(10),
+    dso_priority_score DECIMAL(15,2),
+
+    -- DIO
+    dio_trapped_cash DECIMAL(15,2),
+    dio_excess_days DECIMAL(10,2),
+    dio_expected_recovery DECIMAL(15,2),
+    dio_priority VARCHAR(10),
+    dio_priority_score DECIMAL(15,2),
+
+    -- DPO
+    dpo_trapped_cash DECIMAL(15,2),
+    dpo_deficit_days DECIMAL(10,2),
+    dpo_expected_recovery DECIMAL(15,2),
+    dpo_priority VARCHAR(10),
+    dpo_priority_score DECIMAL(15,2),
+
+    -- Benchmarks used
+    benchmark_dso DECIMAL(10,2),
+    benchmark_dio DECIMAL(10,2),
+    benchmark_dpo DECIMAL(10,2),
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_trapped_cash_company ON trapped_cash_analysis(company_id);
+CREATE INDEX idx_trapped_cash_date ON trapped_cash_analysis(analysis_date);
