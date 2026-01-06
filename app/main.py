@@ -3,7 +3,11 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import sys
+import os
 import traceback
+
+# Add parent directory to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
 
