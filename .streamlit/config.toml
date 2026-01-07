@@ -1,6 +1,3 @@
-[server]
-headless = true
-port = 8501
-
-[browser]
-gatherUsageStats = false
+[supabase]
+url = "https://vlbvrhotrlipaoedudys.supabase.co"
+key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZsYnZyaG90cmxpcGFvZWR1ZHlzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY5OTUzNTgsImV4cCI6MjA4MjU3MTM1OH0.KaPlyzx9Nlg_xaHp76tN9VSZC_Egmbgc4uBjTleChwo"
