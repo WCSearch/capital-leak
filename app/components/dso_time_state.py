@@ -5,6 +5,7 @@ Displays time-state decomposition for DSO diagnostic analysis.
 """
 
 import streamlit as st
+import pandas as pd
 from typing import Dict, List, Optional
 from utils.dso_analysis import format_currency, get_priority_emoji
 
