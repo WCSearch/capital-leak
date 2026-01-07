@@ -610,41 +610,123 @@ def analyze_root_causes(transactions_df: pd.DataFrame, event_logs_df: pd.DataFra
     """
     Analyze transactions and group by root cause.
 
+    If event_logs_df is provided and has data:
+        → Use event_log_analyzer.synthesize_root_causes() (Phase 2: Event log forensics)
+        → Returns evidence-based root causes with HIGH/MEDIUM confidence
+
+    If event_logs_df is empty or None:
+        → Fall back to rule-based classification (Phase 1: Rule-based)
+        → Returns threshold-based classifications with LOW confidence
+
+    This allows dashboard to work with OR without event logs.
+
     Returns:
         List of root cause groups sorted by amount
     """
 
-    transactions = transactions_df.to_dict('records')
-    event_logs = event_logs_df.to_dict('records')
+    # Check if we have event logs to work with
+    has_event_logs = event_logs_df is not None and len(event_logs_df) > 0
 
-    # Group transactions by root cause
+    if has_event_logs:
+        # PHASE 2: Event log forensics
+        from utils.event_log_analyzer import synthesize_root_causes
+
+        # Get detailed root cause classification for each transaction
+        classified_df = synthesize_root_causes(transactions_df, event_logs_df)
+
+    else:
+        # PHASE 1: Rule-based fallback (legacy behavior)
+        # Use the old classification logic for backward compatibility
+        transactions = transactions_df.to_dict('records')
+        event_logs = event_logs_df.to_dict('records') if event_logs_df is not None else []
+
+        # Group transactions by root cause using old logic
+        root_cause_groups = {}
+
+        for txn in transactions:
+            # Classify time state first
+            time_state = classify_dso_time_state(txn, event_logs)
+
+            # Then classify root cause
+            root_cause = classify_root_cause(txn, time_state, event_logs)
+            root_cause_type = root_cause['type']
+
+            if root_cause_type not in root_cause_groups:
+                root_cause_groups[root_cause_type] = {
+                    'type': root_cause_type,
+                    'name': root_cause['name'],
+                    'fix_type': root_cause['fix_type'],
+                    'owner': root_cause['owner'],
+                    'fix_days': root_cause['fix_days'],
+                    'effort_hours': root_cause['effort_hours'],
+                    'action': root_cause['action'],
+                    'transactions': [],
+                    'total_amount': 0,
+                    'count': 0,
+                    'avg_days': 0,
+                    'evidence_source': 'rule_based',
+                    'evidence_detail': ''
+                }
+
+            root_cause_groups[root_cause_type]['transactions'].append(txn)
+            root_cause_groups[root_cause_type]['total_amount'] += txn.get('amount', 0) or 0
+            root_cause_groups[root_cause_type]['count'] += 1
+
+        # Calculate average days for each group
+        for group in root_cause_groups.values():
+            if group['count'] > 0:
+                total_days = sum(t.get('days_outstanding', 0) or 0 for t in group['transactions'])
+                group['avg_days'] = total_days / group['count']
+
+        # Convert to list and sort by total amount (descending)
+        root_cause_list = list(root_cause_groups.values())
+        root_cause_list.sort(key=lambda x: x['total_amount'], reverse=True)
+
+        return root_cause_list
+
+    # Aggregate classified transactions by root cause type
     root_cause_groups = {}
 
-    for txn in transactions:
-        # Classify time state first
-        time_state = classify_dso_time_state(txn, event_logs)
-
-        # Then classify root cause
-        root_cause = classify_root_cause(txn, time_state, event_logs)
-        root_cause_type = root_cause['type']
+    for _, row in classified_df.iterrows():
+        root_cause_type = row['root_cause_type']
 
         if root_cause_type not in root_cause_groups:
+            # Estimate effort hours based on fix type
+            effort_hours = {
+                'system': 8,
+                'policy': 4,
+                'process': 6,
+                'master_data': 6,
+                'behavioral': 6,
+                'manual_review': 8,
+                'none': 0
+            }.get(row['fix_type'], 8)
+
+            # Create human-readable name from type
+            name = root_cause_type.replace('_', ' ').title()
+
+            # Get common evidence detail for this root cause type
+            evidence_detail = row.get('evidence_detail', '')
+
             root_cause_groups[root_cause_type] = {
                 'type': root_cause_type,
-                'name': root_cause['name'],
-                'fix_type': root_cause['fix_type'],
-                'owner': root_cause['owner'],
-                'fix_days': root_cause['fix_days'],
-                'effort_hours': root_cause['effort_hours'],
-                'action': root_cause['action'],
+                'name': name,
+                'fix_type': row['fix_type'],
+                'owner': row['fix_owner'],
+                'fix_days': row['fix_days_estimate'],
+                'effort_hours': effort_hours,
+                'action': evidence_detail if evidence_detail else f'Address {name}',
                 'transactions': [],
                 'total_amount': 0,
                 'count': 0,
-                'avg_days': 0
+                'avg_days': 0,
+                'evidence_source': row.get('evidence_source', 'rule_based'),
+                'evidence_detail': evidence_detail
             }
 
-        root_cause_groups[root_cause_type]['transactions'].append(txn)
-        root_cause_groups[root_cause_type]['total_amount'] += txn.get('amount', 0) or 0
+        # Add transaction to group
+        root_cause_groups[root_cause_type]['transactions'].append(row.to_dict())
+        root_cause_groups[root_cause_type]['total_amount'] += row.get('amount', 0) or 0
         root_cause_groups[root_cause_type]['count'] += 1
 
     # Calculate average days for each group
