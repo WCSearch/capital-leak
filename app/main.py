@@ -424,7 +424,202 @@ elif state['level'] == 2:
             with st.expander("Debug Info"):
                 st.code(traceback.format_exc())
 
-    # FOR DIO/DPO: Show traditional functional area breakdown
+    # FOR DIO: Show diagnostic time-state breakdown (NEW - FORENSICS)
+    elif component == 'DIO':
+        st.subheader("DIO Diagnostic Dashboard")
+
+        # Get trapped cash analysis
+        try:
+            trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
+            if trapped_analysis:
+                initial_estimate = trapped_analysis.get('dio_trapped_cash', 0)
+                st.markdown(f"""
+                    <div style="background-color: #f3f4f6; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+                        <h3>DIO RECOVERY ANALYSIS</h3>
+                        <p><strong>Total Potential Recovery:</strong> ${initial_estimate:,.0f}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            st.warning(f"Unable to load trapped cash analysis: {str(e)}")
+
+        # Fetch DIO data
+        try:
+            inv_response = supabase.table('transactions')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .eq('component_type', 'DIO')\
+                .execute()
+            inventory_df = pd.DataFrame(inv_response.data)
+
+            # Fetch inventory movements if available
+            try:
+                movements_response = supabase.table('inventory_movements')\
+                    .select('*')\
+                    .eq('company_id', selected)\
+                    .execute()
+                movements_df = pd.DataFrame(movements_response.data) if movements_response.data else pd.DataFrame()
+            except:
+                movements_df = pd.DataFrame()
+
+            # Fetch event logs
+            events_response = supabase.table('event_logs')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .execute()
+            event_logs_df = pd.DataFrame(events_response.data)
+
+            if len(inventory_df) > 0:
+                # Import DIO analysis functions
+                from utils.dio_analysis import (
+                    analyze_dio_time_states,
+                    get_dio_time_state_summary,
+                    analyze_dio_recovery_confidence,
+                    analyze_dio_root_causes,
+                    generate_dio_execution_queue
+                )
+                from app.components.dio_time_state import (
+                    render_time_state_breakdown,
+                    render_recovery_confidence,
+                    render_root_cause_heatmap,
+                    render_execution_queue
+                )
+
+                # Analyze time states
+                time_state_groups = analyze_dio_time_states(inventory_df, movements_df, event_logs_df)
+                time_state_summary = get_dio_time_state_summary(time_state_groups)
+
+                st.session_state.dio_time_state_groups = time_state_groups
+
+                # Render views (same pattern as DSO)
+                def on_time_state_drill_down(state_key):
+                    drill_to_time_state('DIO', state_key)
+                    st.rerun()
+
+                render_time_state_breakdown(time_state_summary, on_time_state_drill_down)
+                st.divider()
+
+                confidence_groups = analyze_dio_recovery_confidence(time_state_groups)
+                render_recovery_confidence(confidence_groups)
+                st.divider()
+
+                root_cause_list = analyze_dio_root_causes(inventory_df, movements_df, event_logs_df)
+                render_root_cause_heatmap(root_cause_list)
+                st.divider()
+
+                execution_queue = generate_dio_execution_queue(root_cause_list)
+                render_execution_queue(execution_queue)
+
+            else:
+                st.warning("No DIO data found for analysis")
+
+        except Exception as e:
+            st.error(f"Error analyzing DIO: {str(e)}")
+            import traceback
+            with st.expander("Debug Info"):
+                st.code(traceback.format_exc())
+
+    # FOR DPO: Show diagnostic time-state breakdown (NEW - FORENSICS)
+    elif component == 'DPO':
+        st.subheader("DPO Diagnostic Dashboard")
+
+        # Get trapped cash analysis
+        try:
+            trapped_analysis = get_latest_trapped_cash_analysis(supabase, selected)
+            if trapped_analysis:
+                initial_estimate = trapped_analysis.get('dpo_trapped_cash', 0)
+                st.markdown(f"""
+                    <div style="background-color: #f3f4f6; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+                        <h3>DPO RECOVERY ANALYSIS</h3>
+                        <p><strong>Total Potential Recovery:</strong> ${initial_estimate:,.0f}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            st.warning(f"Unable to load trapped cash analysis: {str(e)}")
+
+        # Fetch DPO data
+        try:
+            ap_response = supabase.table('transactions')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .eq('component_type', 'DPO')\
+                .execute()
+            ap_invoices_df = pd.DataFrame(ap_response.data)
+
+            # Fetch related data
+            try:
+                po_response = supabase.table('purchase_orders')\
+                    .select('*')\
+                    .eq('company_id', selected)\
+                    .execute()
+                po_df = pd.DataFrame(po_response.data) if po_response.data else pd.DataFrame()
+
+                gr_response = supabase.table('goods_receipts')\
+                    .select('*')\
+                    .eq('company_id', selected)\
+                    .execute()
+                gr_df = pd.DataFrame(gr_response.data) if gr_response.data else pd.DataFrame()
+            except:
+                po_df = pd.DataFrame()
+                gr_df = pd.DataFrame()
+
+            # Fetch event logs
+            events_response = supabase.table('event_logs')\
+                .select('*')\
+                .eq('company_id', selected)\
+                .execute()
+            event_logs_df = pd.DataFrame(events_response.data)
+
+            if len(ap_invoices_df) > 0:
+                # Import DPO analysis functions
+                from utils.dpo_analysis import (
+                    analyze_dpo_time_states,
+                    get_dpo_time_state_summary,
+                    analyze_dpo_recovery_confidence,
+                    analyze_dpo_root_causes,
+                    generate_dpo_execution_queue
+                )
+                from app.components.dpo_time_state import (
+                    render_time_state_breakdown,
+                    render_recovery_confidence,
+                    render_root_cause_heatmap,
+                    render_execution_queue
+                )
+
+                # Analyze time states
+                time_state_groups = analyze_dpo_time_states(ap_invoices_df, po_df, event_logs_df)
+                time_state_summary = get_dpo_time_state_summary(time_state_groups)
+
+                st.session_state.dpo_time_state_groups = time_state_groups
+
+                # Render views (same pattern as DSO)
+                def on_time_state_drill_down(state_key):
+                    drill_to_time_state('DPO', state_key)
+                    st.rerun()
+
+                render_time_state_breakdown(time_state_summary, on_time_state_drill_down)
+                st.divider()
+
+                confidence_groups = analyze_dpo_recovery_confidence(time_state_groups)
+                render_recovery_confidence(confidence_groups)
+                st.divider()
+
+                root_cause_list = analyze_dpo_root_causes(ap_invoices_df, po_df, gr_df, event_logs_df)
+                render_root_cause_heatmap(root_cause_list)
+                st.divider()
+
+                execution_queue = generate_dpo_execution_queue(root_cause_list)
+                render_execution_queue(execution_queue)
+
+            else:
+                st.warning("No DPO data found for analysis")
+
+        except Exception as e:
+            st.error(f"Error analyzing DPO: {str(e)}")
+            import traceback
+            with st.expander("Debug Info"):
+                st.code(traceback.format_exc())
+
+    # Fallback for any other components (should not happen)
     else:
         st.subheader(f"{component} Breakdown by Functional Area")
 
@@ -503,18 +698,36 @@ elif state['level'] == 2:
     else:
         st.warning(f"No breakdown data available for {component}")
 
-# LEVEL 2.5: Time-state drill-down (DSO only)
+# LEVEL 2.5: Time-state drill-down (DSO, DIO, DPO)
 elif state['level'] == 2.5:
     component = state['component']
     time_state = state['time_state']
 
-    # Get time state groups from session state
-    if 'time_state_groups' in st.session_state and time_state in st.session_state.time_state_groups:
-        group = st.session_state.time_state_groups[time_state]
+    # Get time state groups from session state (support all components)
+    session_key_map = {
+        'DSO': 'time_state_groups',
+        'DIO': 'dio_time_state_groups',
+        'DPO': 'dpo_time_state_groups'
+    }
+
+    session_key = session_key_map.get(component, 'time_state_groups')
+
+    if session_key in st.session_state and time_state in st.session_state[session_key]:
+        group = st.session_state[session_key][time_state]
         state_name = group['config']['name']
 
         # Convert transactions list to DataFrame
         transactions_df = pd.DataFrame(group['transactions'])
+
+        # Import the appropriate render function based on component
+        if component == 'DSO':
+            from app.components.dso_time_state import render_time_state_drill_down
+        elif component == 'DIO':
+            from app.components.dio_time_state import render_time_state_drill_down
+        elif component == 'DPO':
+            from app.components.dpo_time_state import render_time_state_drill_down
+        else:
+            from app.components.dso_time_state import render_time_state_drill_down
 
         # Render drill-down view
         def on_back():

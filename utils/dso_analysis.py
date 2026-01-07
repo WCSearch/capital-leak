@@ -629,7 +629,7 @@ def analyze_root_causes(transactions_df: pd.DataFrame, event_logs_df: pd.DataFra
 
     if has_event_logs:
         # PHASE 2: Event log forensics
-        from utils.event_log_analyzer import synthesize_root_causes
+        from utils.event_log_analyzer_dso import synthesize_root_causes
 
         # Get detailed root cause classification for each transaction
         classified_df = synthesize_root_causes(transactions_df, event_logs_df)

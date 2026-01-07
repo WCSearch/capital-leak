@@ -479,7 +479,7 @@ def synthesize_root_causes(transactions_df: pd.DataFrame, event_logs_df: pd.Data
     """
 
     # Import the rule-based classifier for fallback
-    from utils.root_cause_classifier import classify_root_causes
+    from utils.root_cause_classifier_dso import classify_root_causes
 
     # Initialize result with all transactions
     result_df = transactions_df.copy()
