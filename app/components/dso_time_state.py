@@ -497,11 +497,33 @@ def render_root_cause_heatmap(root_cause_list: List[Dict], on_drill_callback=Non
     # Create DataFrame for table display
     table_data = []
     for rc in root_cause_list:
+        # Format evidence badge
+        evidence_source = rc.get('evidence_source', 'rule_based')
+        evidence_detail = rc.get('evidence_detail', '')
+
+        # Create evidence badge with color
+        if evidence_source == 'event_log_pattern':
+            evidence_badge = '🔬 Event Log'
+        elif evidence_source == 'system_change':
+            evidence_badge = '⚙️ System Change'
+        elif evidence_source == 'rule_based':
+            evidence_badge = '📊 Rule-Based'
+        else:
+            evidence_badge = '❓ Unknown'
+
+        # Create evidence cell with detail
+        evidence_display = evidence_badge
+        if evidence_detail:
+            # Truncate long evidence details
+            detail_short = evidence_detail[:60] + '...' if len(evidence_detail) > 60 else evidence_detail
+            evidence_display = f"{evidence_badge}\n{detail_short}"
+
         table_data.append({
             'Root Cause': rc['name'],
             'Count': rc['count'],
             'Avg Days': f"{rc['avg_days']:.1f}",
             '$ Impact': format_currency(rc['total_amount']),
+            'Evidence': evidence_display,
             'Fix Type': rc['fix_type'].replace('_', ' ').title(),
             'Owner': rc['owner'],
             'Timeline': f"{rc['fix_days']}d" if rc['fix_days'] else 'TBD'
@@ -515,6 +537,16 @@ def render_root_cause_heatmap(root_cause_list: List[Dict], on_drill_callback=Non
         use_container_width=True,
         hide_index=True
     )
+
+    # Add legend for evidence types
+    st.markdown("""
+        <div style="margin-top: 1rem; padding: 0.5rem; background-color: #f3f4f6; border-radius: 4px;">
+            <strong>Evidence Legend:</strong>
+            🔬 Event Log = High confidence from event sequence analysis |
+            ⚙️ System Change = High confidence from config change correlation |
+            📊 Rule-Based = Low confidence from transaction patterns
+        </div>
+    """, unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
