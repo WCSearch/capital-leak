@@ -15,6 +15,9 @@ from utils.dso_analysis import (
     classify_dso_time_state,
     analyze_dso_time_states,
     get_time_state_summary,
+    analyze_recovery_confidence,
+    analyze_root_causes,
+    generate_execution_queue,
     format_currency
 )
 
@@ -239,8 +242,78 @@ def test_classification():
         print(f"    Expected: {format_currency(exp['amount'])} ({exp['count']} txns)")
         print(f"    Actual:   {format_currency(actual_amount)} ({actual_count} txns)")
 
+    # Test Phase 2: Recovery Confidence
     print("\n" + "="*80)
-    print("TEST COMPLETE")
+    print("PHASE 2: RECOVERY CONFIDENCE ANALYSIS")
+    print("="*80 + "\n")
+
+    confidence_groups = analyze_recovery_confidence(time_state_groups)
+
+    print(f"🟢 CERTAIN: {format_currency(confidence_groups['CERTAIN']['total_amount'])} ({confidence_groups['CERTAIN']['percentage']:.0f}%)")
+    print(f"   Recoverable without customer involvement")
+    print(f"   Expected timeline: {confidence_groups['CERTAIN']['expected_timeline']}")
+    for state in confidence_groups['CERTAIN']['states']:
+        print(f"   - {state['state_name']}: {format_currency(state['amount'])}")
+
+    print(f"\n🟡 PROBABLE: {format_currency(confidence_groups['PROBABLE']['total_amount'])} ({confidence_groups['PROBABLE']['percentage']:.0f}%)")
+    print(f"   Clear fix path, requires coordination")
+    print(f"   Expected timeline: {confidence_groups['PROBABLE']['expected_timeline']}")
+    for state in confidence_groups['PROBABLE']['states']:
+        print(f"   - {state['state_name']}: {format_currency(state['amount'])}")
+
+    print(f"\n🔴 CONTESTED: {format_currency(confidence_groups['CONTESTED']['total_amount'])} ({confidence_groups['CONTESTED']['percentage']:.0f}%)")
+    print(f"   Requires customer action/negotiation")
+    print(f"   Expected timeline: {confidence_groups['CONTESTED']['expected_timeline']}")
+    for state in confidence_groups['CONTESTED']['states']:
+        print(f"   - {state['state_name']}: {format_currency(state['amount'])}")
+
+    actionable = confidence_groups['CERTAIN']['total_amount'] + confidence_groups['PROBABLE']['total_amount']
+    total_conf = sum(g['total_amount'] for g in confidence_groups.values())
+    actionable_pct = (actionable / total_conf * 100) if total_conf > 0 else 0
+    print(f"\n💰 ACTIONABLE RECOVERY: {format_currency(actionable)} (Certain + Probable = {actionable_pct:.0f}%)")
+
+    # Test Phase 3: Root Cause Analysis
+    print("\n" + "="*80)
+    print("PHASE 3: ROOT CAUSE HEATMAP")
+    print("="*80 + "\n")
+
+    root_cause_list = analyze_root_causes(transactions_df, event_logs_df)
+
+    print(f"{'Root Cause':<30} {'Count':>8} {'Avg Days':>10} {'$ Impact':>12} {'Owner':<12} {'Timeline':>10}")
+    print("-"*95)
+    for rc in root_cause_list:
+        timeline = f"{rc['fix_days']}d" if rc['fix_days'] else 'TBD'
+        print(f"{rc['name']:<30} {rc['count']:>8} {rc['avg_days']:>10.1f} {format_currency(rc['total_amount']):>12} {rc['owner']:<12} {timeline:>10}")
+
+    print(f"\n🎯 SURGICAL TARGET: {root_cause_list[0]['name']}")
+    print(f"   {root_cause_list[0]['count']} transactions | {format_currency(root_cause_list[0]['total_amount'])} impact | {root_cause_list[0]['fix_days']}-day fix")
+    print(f"   ACTION: {root_cause_list[0]['action']}")
+    print(f"   OWNER: {root_cause_list[0]['owner']}")
+
+    # Test Phase 4: Execution Queue
+    print("\n" + "="*80)
+    print("PHASE 4: RECOVERY EXECUTION QUEUE")
+    print("="*80)
+    print("Sorted by: $ recovered per day per hour of effort\n")
+
+    execution_queue = generate_execution_queue(root_cause_list)
+
+    print(f"{'Rank':<6} {'Root Cause':<30} {'$ Impact':>12} {'Days':>6} {'Effort':>8} {'$/Day/Hr':>12} {'Owner':<12}")
+    print("-"*100)
+    for item in execution_queue:
+        days = f"{item['fix_days']}d" if item['fix_days'] else 'TBD'
+        effort = f"{item['effort_hours']}h"
+        efficiency = format_currency(item['efficiency'])
+        print(f"#{item['rank']:<5} {item['root_cause_name']:<30} {format_currency(item['total_impact']):>12} {days:>6} {effort:>8} {efficiency:>12} {item['owner']:<12}")
+
+    print(f"\n🎯 NEXT ACTION: Fix #{execution_queue[0]['rank']} - {execution_queue[0]['root_cause_name']}")
+    print(f"   Expected Recovery: {format_currency(execution_queue[0]['total_impact'])} in {execution_queue[0]['fix_days']} days")
+    print(f"   Required Effort: {execution_queue[0]['effort_hours']} hours")
+    print(f"   Owner: {execution_queue[0]['owner']}")
+    print(f"   Efficiency: {format_currency(execution_queue[0]['efficiency'])} per day/hour")
+
+    print("\n" + "="*80)
+    print("ALL PHASES TEST COMPLETE")
     print("="*80 + "\n")
 
 

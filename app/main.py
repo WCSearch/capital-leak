@@ -24,11 +24,17 @@ from app.components.trapped_cash_indicator import (
 # Import DSO time-state analysis
 from utils.dso_analysis import (
     analyze_dso_time_states,
-    get_time_state_summary
+    get_time_state_summary,
+    analyze_recovery_confidence,
+    analyze_root_causes,
+    generate_execution_queue
 )
 from app.components.dso_time_state import (
     render_time_state_breakdown,
-    render_time_state_drill_down
+    render_time_state_drill_down,
+    render_recovery_confidence,
+    render_root_cause_heatmap,
+    render_execution_queue
 )
 
 st.set_page_config(page_title="Capital Leak Analysis", page_icon="💰", layout="wide")
@@ -384,12 +390,31 @@ elif state['level'] == 2:
                 # Store in session state for drill-down
                 st.session_state.time_state_groups = time_state_groups
 
-                # Render time-state breakdown
+                # PHASE 1: Render time-state breakdown
                 def on_time_state_drill_down(state_key):
                     drill_to_time_state('DSO', state_key)
                     st.rerun()
 
                 render_time_state_breakdown(time_state_summary, on_time_state_drill_down)
+
+                st.divider()
+
+                # PHASE 2: Render recovery confidence
+                confidence_groups = analyze_recovery_confidence(time_state_groups)
+                render_recovery_confidence(confidence_groups)
+
+                st.divider()
+
+                # PHASE 3: Render root cause heatmap
+                root_cause_list = analyze_root_causes(transactions_df, event_logs_df)
+                render_root_cause_heatmap(root_cause_list)
+
+                st.divider()
+
+                # PHASE 4: Render execution queue
+                execution_queue = generate_execution_queue(root_cause_list)
+                render_execution_queue(execution_queue)
+
             else:
                 st.warning("No DSO transactions found for analysis")
 
