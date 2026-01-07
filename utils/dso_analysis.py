@@ -87,7 +87,7 @@ def classify_dso_time_state(transaction: Dict, event_logs: List[Dict]) -> str:
             - transaction_id
             - transaction_date
             - due_date
-            - outstanding_amount
+            - amount
             - days_outstanding
             - status (OPEN, CREATED, PENDING_SEND, SENT, DISPUTED, CLEARED)
             - erp_metadata (JSONB with delivery_date, payment_terms_days, credit_hold, dispute_reason)
@@ -109,7 +109,7 @@ def classify_dso_time_state(transaction: Dict, event_logs: List[Dict]) -> str:
         None
     )
 
-    if payment_event and status != 'CLEARED':
+    if payment_event and status not in ['CLEARED', 'PAID']:
         event_timestamp = payment_event.get('event_timestamp')
         if event_timestamp:
             days_since_payment = days_between(event_timestamp, datetime.now())
@@ -121,7 +121,7 @@ def classify_dso_time_state(transaction: Dict, event_logs: List[Dict]) -> str:
         return 'sent_disputed'
 
     # Check if invoiced but not sent
-    if status in ['CREATED', 'PENDING_SEND']:
+    if status in ['CREATED', 'PENDING_SEND', 'PENDING']:
         transaction_date = transaction.get('transaction_date')
         if transaction_date:
             days_since_creation = days_between(transaction_date, datetime.now())
@@ -137,9 +137,9 @@ def classify_dso_time_state(transaction: Dict, event_logs: List[Dict]) -> str:
         if days_since_delivery > 7:
             return 'fulfilled_not_invoiced'
 
-    # Check if credit hold
+    # Check if credit hold (either status or metadata flag)
     credit_hold = metadata.get('credit_hold', False)
-    if credit_hold and days_outstanding > 30:
+    if (credit_hold or status == 'CREDIT_HOLD') and days_outstanding > 30:
         # Check if there have been any credit reviews
         credit_review_events = [
             e for e in event_logs
@@ -156,8 +156,9 @@ def classify_dso_time_state(transaction: Dict, event_logs: List[Dict]) -> str:
     if days_outstanding > (payment_terms_days + grace_period):
         return 'undisputed_unpaid'
 
-    # Default: normal (not excess time)
-    return 'normal'
+    # Default fallback: classify as undisputed_unpaid to ensure visibility in dashboard
+    # This ensures ALL transactions are categorized and visible, not hidden as 'normal'
+    return 'undisputed_unpaid'
 
 
 def analyze_dso_time_states(
@@ -223,7 +224,7 @@ def analyze_dso_time_states(
 
         if time_state in time_state_groups:
             time_state_groups[time_state]['transactions'].append(txn)
-            time_state_groups[time_state]['total_amount'] += txn.get('outstanding_amount', 0) or 0
+            time_state_groups[time_state]['total_amount'] += txn.get('amount', 0) or 0
             time_state_groups[time_state]['count'] += 1
 
     # Calculate average days for each group
@@ -436,7 +437,7 @@ def analyze_recovery_confidence(time_state_groups: Dict) -> Dict:
             confidence_level = confidence_data['confidence']
 
             if confidence_level in confidence_groups:
-                confidence_groups[confidence_level]['total_amount'] += txn.get('outstanding_amount', 0) or 0
+                confidence_groups[confidence_level]['total_amount'] += txn.get('amount', 0) or 0
 
     # Calculate totals and percentages
     total_amount = sum(g['total_amount'] for g in confidence_groups.values())
@@ -643,7 +644,7 @@ def analyze_root_causes(transactions_df: pd.DataFrame, event_logs_df: pd.DataFra
             }
 
         root_cause_groups[root_cause_type]['transactions'].append(txn)
-        root_cause_groups[root_cause_type]['total_amount'] += txn.get('outstanding_amount', 0) or 0
+        root_cause_groups[root_cause_type]['total_amount'] += txn.get('amount', 0) or 0
         root_cause_groups[root_cause_type]['count'] += 1
 
     # Calculate average days for each group
