@@ -56,17 +56,29 @@ def get_priority_color(priority):
         return colors.HexColor('#6C757D')  # Gray
 
 
-def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/diagnostic_report.pdf'):
+def create_diagnostic_pdf(diagnostic_data, output_path=None):
     """
     Generate a professional 1-page diagnostic PDF
 
     Args:
         diagnostic_data: Dictionary containing company info, metrics, and findings
-        output_path: Path where PDF should be saved
+        output_path: Path where PDF should be saved (defaults to ./diagnostic_report.pdf)
     """
 
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # Set default output path if not provided
+    if output_path is None:
+        output_path = os.path.join(os.getcwd(), 'diagnostic_report.pdf')
+
+    # Try to ensure output directory exists, with fallback to current directory
+    try:
+        output_dir = os.path.dirname(output_path)
+        if output_dir:  # Only create if there's a directory component
+            os.makedirs(output_dir, exist_ok=True)
+    except (PermissionError, OSError) as e:
+        # Fall back to current directory if permissions fail
+        print(f"⚠ Warning: Cannot write to {output_path}: {e}")
+        output_path = os.path.join(os.getcwd(), 'diagnostic_report.pdf')
+        print(f"  Falling back to: {output_path}")
 
     # Create PDF with margins
     doc = SimpleDocTemplate(
@@ -398,5 +410,5 @@ if __name__ == "__main__":
         ]
     }
 
-    # Generate PDF
-    create_diagnostic_pdf(diagnostic_data, '/mnt/user-data/outputs/diagnostic_report.pdf')
+    # Generate PDF (defaults to ./diagnostic_report.pdf)
+    create_diagnostic_pdf(diagnostic_data)
