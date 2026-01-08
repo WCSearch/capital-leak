@@ -63,20 +63,36 @@ The ingestion script runs in Claude Code's containerized environment which route
 
 ### Evidence
 ```bash
-# Proxy configuration detected:
-HTTPS_PROXY=http://...@21.0.0.197:15004
-allowed_hosts="...many hosts..."
-# ❌ *.supabase.co NOT in list
+# Proxy configuration (analyzed 2026-01-08):
+Total allowed hosts: 183
+Includes: github.com, pypi.org, npmjs.com, docker.io, azure.com, etc.
+❌ *.supabase.co NOT in allowed_hosts list
+
+# Specific blocked domains:
+vlbvrhotrlipaoedudys.supabase.co (API endpoint)
+db.vlbvrhotrlipaoedudys.supabase.co (PostgreSQL direct connection)
 ```
 
+### Pro Tier Investigation (2026-01-08)
+**Tested:** Upgraded to Claude Code Pro tier with GitHub-Supabase integration
+
+**Results:**
+- ❌ **API Access:** Still blocked (403 Forbidden from proxy)
+- ❌ **Direct PostgreSQL:** DNS resolution fails (db.vlbvrhotrlipaoedudys.supabase.co)
+- ℹ️ **GitHub Integration:** This is for database branching (syncing schema from repo to Supabase preview branches), NOT for network access
+
+**Key Finding:** Pro tier does NOT add `*.supabase.co` to the proxy whitelist. The network restriction remains unchanged.
+
 ### Error Progression
-1. **Initial Error:** `403 Forbidden` - Proxy blocking requests
+1. **Initial Error:** `403 Forbidden` - Proxy blocking API requests
 2. **After Bypass Attempt:** `DNS resolution failure` - Environment requires proxy
+3. **After Pro Upgrade:** Same errors - no change to network access
 
 ### Why Database is Fine But API Fails
 - ✅ **Database:** All permissions, RLS, and grants configured perfectly
 - ✅ **API Key:** Service role key has full admin access
-- ❌ **Network:** Proxy blocks requests before they reach Supabase
+- ✅ **PostgreSQL Credentials:** Direct connection string in .env file
+- ❌ **Network:** Proxy blocks ALL requests to *.supabase.co before they reach Supabase
 
 ## 🔧 Solutions
 
@@ -176,6 +192,9 @@ scripts/
 ├── validate_synthetic_data.py (validation)
 ├── test_supabase_connection.py (connection test)
 ├── debug_supabase_error.py (error debug)
+├── test_direct_db_access.py (Pro tier API test)
+├── test_postgres_connection.py (Pro tier PostgreSQL test)
+├── check_proxy_allowlist.py (proxy configuration analyzer)
 └── setup_rls_policies.py (RLS helper)
 ```
 
