@@ -734,6 +734,15 @@ def generate_dio_transactions(company_id):
                     'document_number': f'45{random.randint(10000000, 99999999)}'
                 })
 
+        # Determine GL account - split 60% raw materials, 40% finished goods
+        # This matches the component_details breakdown
+        if i < int(DIO_ITEMS * 0.6):
+            gl_account = '1400000'  # Raw Materials Inventory (first 480 items)
+            gl_account_name = 'Raw Materials Inventory'
+        else:
+            gl_account = '1410000'  # Finished Goods Inventory (last 320 items)
+            gl_account_name = 'Finished Goods Inventory'
+
         # Create transaction record
         transactions.append({
             'transaction_id': trans_id,
@@ -745,7 +754,7 @@ def generate_dio_transactions(company_id):
             'amount': amount,
             'outstanding_amount': amount,
             'days_outstanding': days_outstanding,
-            'gl_account': '1400000',
+            'gl_account': gl_account,
             'customer_vendor': None,
             'status': status,
             'erp_metadata': json.dumps(erp_metadata)
