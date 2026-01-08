@@ -77,10 +77,7 @@ def get_supabase_client() -> Client:
 def clean_dataframe(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
     """Clean and prepare dataframe for insertion"""
 
-    # Convert NaN to None for proper NULL handling
-    df = df.where(pd.notnull(df), None)
-
-    # Parse JSON fields if they're strings
+    # Parse JSON fields FIRST (before converting NaN to None)
     json_fields = {
         'transactions': ['erp_metadata'],
         'event_logs': ['event_data']
@@ -91,7 +88,7 @@ def clean_dataframe(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
             if field in df.columns:
                 df[field] = df[field].apply(lambda x: json.loads(x) if isinstance(x, str) and x else x)
 
-    # Parse dates
+    # Parse dates (handle None/NaN properly)
     date_fields = {
         'companies': ['analysis_date'],
         'transactions': ['transaction_date', 'due_date'],
@@ -103,14 +100,19 @@ def clean_dataframe(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
 
     if table_name in date_fields:
         for field in date_fields[table_name]:
-            if field in df.columns and df[field].dtype == 'object':
+            if field in df.columns:
                 try:
-                    df[field] = pd.to_datetime(df[field]).dt.strftime('%Y-%m-%d %H:%M:%S')
-                    # For date-only fields, strip time
-                    if field in ['analysis_date', 'transaction_date', 'due_date', 'calculation_date', 'movement_date', 'po_date']:
-                        df[field] = pd.to_datetime(df[field]).dt.strftime('%Y-%m-%d')
+                    # Only parse non-null values
+                    df[field] = df[field].apply(
+                        lambda x: pd.to_datetime(x).strftime('%Y-%m-%d') if pd.notnull(x) else None
+                    )
                 except:
-                    pass
+                    # If parsing fails, convert NaN to None
+                    df[field] = df[field].apply(lambda x: x if pd.notnull(x) else None)
+
+    # Convert ALL remaining NaN to None for proper NULL handling
+    # This MUST be done last to ensure all NaN are caught
+    df = df.where(pd.notnull(df), None)
 
     return df
 
