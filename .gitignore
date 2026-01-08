@@ -5,5 +5,6 @@ venv/
 data/client_exports/
 *.csv
 *.xlsx
+*.pdf
 .DS_Store
 .streamlit/secrets.toml
