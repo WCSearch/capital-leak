@@ -1,8 +1,10 @@
 """
-Ingest Synthetic SAP Data into Supabase
+Ingest Synthetic ERP Data into Supabase
 
 This script loads the generated CSV files into the Supabase database,
 handling proper ordering, validation, and error handling.
+
+Supports multiple ERP datasets: SAP, Infor, Oracle
 
 Author: Capital Leak Analysis Team
 Date: 2025-01-07
@@ -16,6 +18,7 @@ from supabase import create_client, Client
 from tqdm import tqdm
 import sys
 import os
+import argparse
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -25,7 +28,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-DATA_DIR = Path("data/synthetic")
 BATCH_SIZE = 100
 
 # Supabase connection
@@ -43,13 +45,21 @@ if SUPABASE_URL.startswith("postgresql://"):
         project_ref = host_part.replace("db.", "").replace(".supabase.co", "")
         SUPABASE_URL = f"https://{project_ref}.supabase.co"
 
-print("=" * 80)
-print("SYNTHETIC SAP DATA INGESTION")
-print("=" * 80)
-print(f"Data Directory: {DATA_DIR.absolute()}")
-print(f"Supabase URL: {SUPABASE_URL}")
-print(f"Batch Size: {BATCH_SIZE}")
-print("=" * 80)
+# Dataset configurations for display
+DATASET_INFO = {
+    'sap': {
+        'name': 'TechMfg Industries',
+        'erp': 'SAP ECC 6.0'
+    },
+    'infor': {
+        'name': 'AmeriParts Distribution',
+        'erp': 'Infor CloudSuite Distribution'
+    },
+    'oracle': {
+        'name': 'PrecisionTech Manufacturing',
+        'erp': 'Oracle E-Business Suite R12.2'
+    }
+}
 
 
 def get_supabase_client() -> Client:
@@ -166,9 +176,9 @@ def batch_insert(client: Client, table_name: str, df: pd.DataFrame, desc: str = 
     return stats
 
 
-def ingest_companies(client: Client):
+def ingest_companies(client: Client, data_dir: Path):
     """Ingest companies data"""
-    csv_path = DATA_DIR / "companies.csv"
+    csv_path = data_dir / "companies.csv"
 
     if not csv_path.exists():
         print(f"✗ File not found: {csv_path}")
@@ -181,9 +191,9 @@ def ingest_companies(client: Client):
     return df['company_id'].iloc[0] if len(df) > 0 else None
 
 
-def ingest_transactions(client: Client, company_id: str):
+def ingest_transactions(client: Client, company_id: str, data_dir: Path):
     """Ingest transactions data"""
-    csv_path = DATA_DIR / "transactions.csv"
+    csv_path = data_dir / "transactions.csv"
 
     if not csv_path.exists():
         print(f"✗ File not found: {csv_path}")
@@ -200,9 +210,9 @@ def ingest_transactions(client: Client, company_id: str):
     return stats
 
 
-def ingest_event_logs(client: Client):
+def ingest_event_logs(client: Client, data_dir: Path):
     """Ingest event logs data"""
-    csv_path = DATA_DIR / "event_logs.csv"
+    csv_path = data_dir / "event_logs.csv"
 
     if not csv_path.exists():
         print(f"✗ File not found: {csv_path}")
@@ -215,9 +225,9 @@ def ingest_event_logs(client: Client):
     return stats
 
 
-def ingest_ccc_metrics(client: Client):
+def ingest_ccc_metrics(client: Client, data_dir: Path):
     """Ingest CCC metrics data"""
-    csv_path = DATA_DIR / "ccc_metrics.csv"
+    csv_path = data_dir / "ccc_metrics.csv"
 
     if not csv_path.exists():
         print(f"✗ File not found: {csv_path}")
@@ -230,9 +240,9 @@ def ingest_ccc_metrics(client: Client):
     return stats
 
 
-def ingest_component_details(client: Client):
+def ingest_component_details(client: Client, data_dir: Path):
     """Ingest component details data"""
-    csv_path = DATA_DIR / "component_details.csv"
+    csv_path = data_dir / "component_details.csv"
 
     if not csv_path.exists():
         print(f"✗ File not found: {csv_path}")
@@ -245,7 +255,7 @@ def ingest_component_details(client: Client):
     return stats
 
 
-def verify_csv_files():
+def verify_csv_files(data_dir: Path, dataset_name: str):
     """Verify all required CSV files exist"""
     required_files = [
         "companies.csv",
@@ -259,7 +269,7 @@ def verify_csv_files():
     all_exist = True
 
     for file in required_files:
-        path = DATA_DIR / file
+        path = data_dir / file
         exists = path.exists()
         status = "✓" if exists else "✗"
         print(f"   {status} {file}")
@@ -268,7 +278,7 @@ def verify_csv_files():
             all_exist = False
 
     if not all_exist:
-        print("\n✗ Missing required CSV files. Run generate_synthetic_sap_data.py first.")
+        print(f"\n✗ Missing required CSV files. Run: python scripts/generate_synthetic_data.py --dataset {dataset_name}")
         sys.exit(1)
 
     print("   ✓ All required files found")
@@ -276,9 +286,50 @@ def verify_csv_files():
 
 def main():
     """Main execution function"""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Ingest synthetic ERP data into Supabase',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available datasets:
+  sap    - TechMfg Industries (Electronics Manufacturing, SAP ECC 6.0)
+  infor  - AmeriParts Distribution (Automotive Parts, Infor CloudSuite)
+  oracle - PrecisionTech Manufacturing (Industrial Equipment, Oracle EBS)
+
+Examples:
+  python ingest_synthetic_data.py --dataset sap
+  python ingest_synthetic_data.py --dataset infor
+  python ingest_synthetic_data.py --dataset oracle
+        """
+    )
+
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        required=True,
+        choices=['sap', 'infor', 'oracle'],
+        help='Dataset to ingest (sap, infor, or oracle)'
+    )
+
+    args = parser.parse_args()
+
+    # Set data directory based on dataset
+    data_dir = Path(f"data/synthetic/{args.dataset}")
+    dataset_info = DATASET_INFO[args.dataset]
+
+    # Print header
+    print("=" * 80)
+    print(f"SYNTHETIC ERP DATA INGESTION - {dataset_info['erp'].upper()}")
+    print("=" * 80)
+    print(f"Company: {dataset_info['name']}")
+    print(f"ERP System: {dataset_info['erp']}")
+    print(f"Data Directory: {data_dir.absolute()}")
+    print(f"Supabase URL: {SUPABASE_URL}")
+    print(f"Batch Size: {BATCH_SIZE}")
+    print("=" * 80)
 
     # Verify CSV files exist
-    verify_csv_files()
+    verify_csv_files(data_dir, args.dataset)
 
     # Initialize Supabase client
     client = get_supabase_client()
@@ -291,37 +342,39 @@ def main():
         print("\n" + "=" * 80)
         print("STEP 1: Ingesting Companies")
         print("=" * 80)
-        company_id = ingest_companies(client)
+        company_id = ingest_companies(client, data_dir)
         if not company_id:
             print("✗ Failed to ingest companies. Aborting.")
             sys.exit(1)
+
+        print(f"   ✓ Company ID: {company_id}")
 
         # Step 2: Ingest transactions (before event logs due to foreign keys)
         print("\n" + "=" * 80)
         print("STEP 2: Ingesting Transactions")
         print("=" * 80)
-        trans_stats = ingest_transactions(client, company_id)
+        trans_stats = ingest_transactions(client, company_id, data_dir)
         all_stats['transactions'] = trans_stats
 
         # Step 3: Ingest event logs
         print("\n" + "=" * 80)
         print("STEP 3: Ingesting Event Logs")
         print("=" * 80)
-        event_stats = ingest_event_logs(client)
+        event_stats = ingest_event_logs(client, data_dir)
         all_stats['event_logs'] = event_stats
 
         # Step 4: Ingest CCC metrics
         print("\n" + "=" * 80)
         print("STEP 4: Ingesting CCC Metrics")
         print("=" * 80)
-        ccc_stats = ingest_ccc_metrics(client)
+        ccc_stats = ingest_ccc_metrics(client, data_dir)
         all_stats['ccc_metrics'] = ccc_stats
 
         # Step 5: Ingest component details
         print("\n" + "=" * 80)
         print("STEP 5: Ingesting Component Details")
         print("=" * 80)
-        comp_stats = ingest_component_details(client)
+        comp_stats = ingest_component_details(client, data_dir)
         all_stats['component_details'] = comp_stats
 
         # Print summary
@@ -329,6 +382,8 @@ def main():
         print("INGESTION COMPLETE")
         print("=" * 80)
 
+        print(f"\nDataset: {dataset_info['name']} ({dataset_info['erp']})")
+        print(f"Company ID: {company_id}")
         print("\nSummary:")
         total_success = 0
         total_errors = 0
@@ -349,7 +404,13 @@ def main():
             print("✅ No errors!")
 
         print("\n✅ Data ingestion complete!")
-        print("\nNext step: python scripts/validate_synthetic_data.py")
+        print(f"\nNext steps:")
+        print(f"  1. Generate diagnostic PDF:")
+        print(f"     python scripts/generate_diagnostic_pdf.py --company-id {company_id}")
+        print(f"  2. Ingest other datasets:")
+        for ds in ['sap', 'infor', 'oracle']:
+            if ds != args.dataset:
+                print(f"     python scripts/ingest_synthetic_data.py --dataset {ds}")
 
     except Exception as e:
         print(f"\n✗ Fatal error during ingestion: {e}")
