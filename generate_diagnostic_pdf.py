@@ -310,7 +310,7 @@ def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/d
             ['Trapped Capital (Fully Recoverable)', format_currency_millions(recovery['trapped_capital']), format_currency_millions(recovery['trapped_capital'])],
             ['Partial Recovery (Liquidation)', format_currency_millions(recovery['total_value'] - recovery['trapped_capital'] - recovery['recognized_losses']) if recovery['total_value'] > 0 else '$0.0M', format_currency_millions(recovery['partial_recovery'])],
             ['Recognized Losses (Write-offs)', format_currency_millions(recovery['recognized_losses']), '$0.0M'],
-            ['TOTAL', format_currency_millions(recovery['total_value']), f"{format_currency_millions(recovery['net_recovery'])} ({recovery['recovery_rate']:.1f}%)']
+            ['TOTAL', format_currency_millions(recovery['total_value']), f"{format_currency_millions(recovery['net_recovery'])} ({recovery['recovery_rate']:.1f}%)"]
         ]
 
         recovery_table = Table(recovery_data, colWidths=[2.8*inch, 1.6*inch, 1.6*inch])
