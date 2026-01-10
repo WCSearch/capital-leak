@@ -666,6 +666,8 @@ class SyntheticDataGenerator:
                 event_logs.extend(issue_data['events'])
                 if 'movements' in issue_data:
                     inventory_movements.extend(issue_data['movements'])
+                if 'erp_metadata' in issue_data:
+                    erp_metadata.update(issue_data['erp_metadata'])
             else:
                 # Normal flow
                 events, movements = self._generate_normal_dio_flow(
@@ -717,17 +719,22 @@ class SyntheticDataGenerator:
             }
         elif self.dataset_name == 'infor':
             return {
-                'Cycle count adjustments pending': 234,
+                'Cycle count positive variances': 148,  # 63% - trapped capital
+                'Cycle count negative variances': 86,   # 37% - recognized losses
                 'Cross-dock staging timeouts': 145,
-                'RTV authorization delays': 78,
-                'Obsolete inventory': 89
+                'RTV authorization delays (accepted)': 50,  # Trapped capital
+                'RTV authorization delays (rejected)': 28,  # Losses
+                'Obsolete inventory (liquidation)': 55,  # Partial recovery
+                'Obsolete inventory (zero value)': 34   # Total loss
             }
         else:  # oracle
             return {
                 'Work order release delays': 156,
                 'Subcontract PO delays': 89,
-                'Quarantine pending MRB': 112,
-                'Obsolete inventory': 67
+                'Quarantine pending MRB (releasable)': 70,  # Trapped capital
+                'Quarantine pending MRB (failed)': 42,      # Losses
+                'Obsolete inventory (liquidation)': 40,     # Partial recovery
+                'Obsolete inventory (zero value)': 27      # Total loss
             }
 
     def _get_material_types(self):
@@ -758,7 +765,7 @@ class SyntheticDataGenerator:
         events = self.config['event_types']
         modules = self.config['modules']
 
-        # Issue #1: Valuation/posting issues
+        # Issue #1: Valuation/posting issues (for SAP and Oracle) or cycle count variances (for Infor)
         issue1_name = list(target_counts.keys())[0]
         issue1_target = target_counts[issue1_name]
 
@@ -783,29 +790,50 @@ class SyntheticDataGenerator:
                 return {'status': status, 'amount': 0.0, 'events': event_list, 'movements': movements}
 
             elif self.dataset_name == 'infor':
-                status = "COUNT_VARIANCE_PENDING"
+                # Positive cycle count variance - trapped capital
+                status = "COUNT_VARIANCE_POSITIVE"
                 count_date = trans_date + timedelta(days=random.randint(1, 15))
-                variance_qty = random.randint(1, 10)
+                system_qty = quantity
+                variance_qty = random.randint(5, max(5, int(quantity * 0.15)))
+                actual_qty = system_qty + variance_qty
+                variance_value = round(variance_qty * unit_price, 2)
+
+                erp_metadata = {
+                    'system_qty': system_qty,
+                    'counted_qty': actual_qty,
+                    'variance_qty': variance_qty,
+                    'variance_value': variance_value,
+                    'variance_type': 'OVERAGE',
+                    'recovery_category': 'TRAPPED_CAPITAL',
+                    'recovery_potential': variance_value,
+                    'root_cause': 'Goods receipts posted without valuation or found during physical count'
+                }
+
                 event_list = [
                     self._create_event(trans_id, company_id, events['goods_receipt'],
                                      trans_date, 'RECEIVING', modules['materials'],
-                                     'Receipt posted', {'quantity': quantity}),
+                                     'Receipt posted', {'quantity': system_qty}),
                     self._create_event(trans_id, company_id, events['valuation_posted'],
                                      trans_date + timedelta(hours=1), 'SYSTEM_AUTO', modules['materials'],
                                      'Inventory valued', {'amount': amount}),
                     self._create_event(trans_id, company_id, 'CYCLE_COUNT_ENTERED',
                                      count_date, 'CYCLE_COUNTER', modules['materials'],
-                                     'Cycle count variance detected',
-                                     {'system_qty': quantity, 'physical_qty': quantity - variance_qty, 'variance': variance_qty})
+                                     'Positive variance detected - physical count exceeds system',
+                                     {'system_qty': system_qty, 'physical_qty': actual_qty, 'variance_qty': variance_qty, 'variance_value': variance_value, 'variance_type': 'OVERAGE'})
                 ]
                 movements = [
                     self._create_movement(company_id, material_id, trans_date, 'GOODS_RECEIPT',
-                                        quantity, amount, 'GR', f'45{random.randint(10000000, 99999999)}')
+                                        system_qty, amount, 'GR', f'45{random.randint(10000000, 99999999)}')
                 ]
-                return {'status': status, 'events': event_list, 'movements': movements}
+                return {'status': status, 'amount': variance_value, 'events': event_list, 'movements': movements, 'erp_metadata': erp_metadata}
 
             else:  # oracle
                 status = "RELEASED_NOT_STARTED"
+                erp_metadata = {
+                    'recovery_category': 'TRAPPED_CAPITAL',
+                    'recovery_potential': amount,
+                    'root_cause': 'Work order released but materials not allocated - inventory stuck'
+                }
                 event_list = [
                     self._create_event(trans_id, company_id, 'WORK_ORDER_CREATED',
                                      trans_date - timedelta(days=5), 'PLANNER', modules['materials'],
@@ -815,10 +843,59 @@ class SyntheticDataGenerator:
                                      'Work order released to shop floor', {'quantity': quantity})
                 ]
                 movements = []
-                return {'status': status, 'events': event_list, 'movements': movements}
+                return {'status': status, 'events': event_list, 'movements': movements, 'erp_metadata': erp_metadata}
 
-        # Issue #2: Hold/staging issues
-        issue2_name = list(target_counts.keys())[1]
+        # Issue #2: Negative cycle count variances (for Infor only)
+        if self.dataset_name == 'infor':
+            issue2_name = list(target_counts.keys())[1]
+            issue2_target = target_counts[issue2_name]
+
+            if (issue_counts[issue2_name] < issue2_target and
+                trans_date >= dates['valuation_issue_start'] and
+                trans_date < dates['valuation_issue_start'] + timedelta(days=90) and
+                random.random() < 0.08):
+
+                issue_counts[issue2_name] += 1
+
+                # Negative cycle count variance - recognized loss
+                status = "COUNT_VARIANCE_NEGATIVE"
+                count_date = trans_date + timedelta(days=random.randint(1, 15))
+                system_qty = quantity
+                variance_qty = random.randint(5, max(5, int(quantity * 0.12)))
+                actual_qty = system_qty - variance_qty
+                variance_value = round(variance_qty * unit_price, 2)
+
+                erp_metadata = {
+                    'system_qty': system_qty,
+                    'counted_qty': actual_qty,
+                    'variance_qty': -variance_qty,
+                    'variance_value': -variance_value,
+                    'variance_type': 'SHORTAGE',
+                    'recovery_category': 'RECOGNIZED_LOSS',
+                    'recovery_potential': 0,
+                    'root_cause': 'Shrinkage/theft - physical inventory missing, unrecorded consumption'
+                }
+
+                event_list = [
+                    self._create_event(trans_id, company_id, events['goods_receipt'],
+                                     trans_date, 'RECEIVING', modules['materials'],
+                                     'Receipt posted', {'quantity': system_qty}),
+                    self._create_event(trans_id, company_id, events['valuation_posted'],
+                                     trans_date + timedelta(hours=1), 'SYSTEM_AUTO', modules['materials'],
+                                     'Inventory valued', {'amount': amount}),
+                    self._create_event(trans_id, company_id, 'CYCLE_COUNT_ENTERED',
+                                     count_date, 'CYCLE_COUNTER', modules['materials'],
+                                     'Negative variance detected - physical count less than system',
+                                     {'system_qty': system_qty, 'physical_qty': actual_qty, 'variance_qty': -variance_qty, 'variance_value': -variance_value, 'variance_type': 'SHORTAGE'})
+                ]
+                movements = [
+                    self._create_movement(company_id, material_id, trans_date, 'GOODS_RECEIPT',
+                                        system_qty, amount, 'GR', f'45{random.randint(10000000, 99999999)}')
+                ]
+                return {'status': status, 'amount': variance_value, 'events': event_list, 'movements': movements, 'erp_metadata': erp_metadata}
+
+        # Issue #3: Hold/staging issues
+        issue2_name = list(target_counts.keys())[1] if self.dataset_name != 'infor' else list(target_counts.keys())[2]
         issue2_target = target_counts[issue2_name]
 
         if issue_counts[issue2_name] < issue2_target and random.random() < 0.12:
@@ -843,6 +920,11 @@ class SyntheticDataGenerator:
             elif self.dataset_name == 'infor':
                 status = "STAGED_NOT_SHIPPED"
                 staged_date = trans_date + timedelta(days=random.randint(3, 10))
+                erp_metadata = {
+                    'recovery_category': 'TRAPPED_CAPITAL',
+                    'recovery_potential': amount,
+                    'root_cause': 'Cross-dock staging timeout - inventory exists but stuck in staging area'
+                }
                 event_list = [
                     self._create_event(trans_id, company_id, 'ORDER_PICK_RELEASED',
                                      trans_date, 'WAREHOUSE_SYSTEM', modules['sales'],

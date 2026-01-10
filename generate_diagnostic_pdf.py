@@ -17,11 +17,15 @@ from pathlib import Path
 import os
 import sys
 import argparse
+import pandas as pd
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Import recovery analysis
+from utils.recovery_analysis import calculate_dio_recovery
 
 
 class ColoredBox(Flowable):
@@ -283,6 +287,74 @@ def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/d
         if idx < len(sorted_findings) - 1:
             elements.append(Spacer(1, 0.1*inch))
 
+    # --- DIO RECOVERY ANALYSIS SECTION ---
+    if diagnostic_data.get('dio_recovery_analysis'):
+        elements.append(Spacer(1, 0.15*inch))
+
+        recovery = diagnostic_data['dio_recovery_analysis']
+
+        # Section header
+        recovery_header_style = ParagraphStyle(
+            'RecoveryHeader',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.HexColor('#0066CC'),
+            spaceAfter=6,
+            fontName='Helvetica-Bold'
+        )
+        elements.append(Paragraph("DIO NET RECOVERY ANALYSIS", recovery_header_style))
+
+        # Recovery breakdown table
+        recovery_data = [
+            ['Category', 'Amount', 'Recoverable'],
+            ['Trapped Capital (Fully Recoverable)', format_currency_millions(recovery['trapped_capital']), format_currency_millions(recovery['trapped_capital'])],
+            ['Partial Recovery (Liquidation)', format_currency_millions(recovery['total_value'] - recovery['trapped_capital'] - recovery['recognized_losses']) if recovery['total_value'] > 0 else '$0.0M', format_currency_millions(recovery['partial_recovery'])],
+            ['Recognized Losses (Write-offs)', format_currency_millions(recovery['recognized_losses']), '$0.0M'],
+            ['TOTAL', format_currency_millions(recovery['total_value']), f"{format_currency_millions(recovery['net_recovery'])} ({recovery['recovery_rate']:.1f}%)']
+        ]
+
+        recovery_table = Table(recovery_data, colWidths=[2.8*inch, 1.6*inch, 1.6*inch])
+        recovery_table.setStyle(TableStyle([
+            # Header row
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0066CC')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            # Data rows
+            ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -2), colors.black),
+            ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -2), 8),
+            # Total row
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E8F4F8')),
+            ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#0066CC')),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, -1), (-1, -1), 9),
+            # Borders
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+            ('BOX', (0, 0), (-1, -1), 1.5, colors.HexColor('#0066CC')),
+            ('PADDING', (0, 0), (-1, -1), 6),
+        ]))
+
+        elements.append(recovery_table)
+        elements.append(Spacer(1, 0.08*inch))
+
+        # Recovery note
+        recovery_note_style = ParagraphStyle(
+            'RecoveryNote',
+            parent=styles['Normal'],
+            fontSize=7,
+            textColor=colors.HexColor('#666666'),
+            fontName='Helvetica-Oblique'
+        )
+        elements.append(Paragraph(
+            f"<b>Net Recovery:</b> ${recovery['net_recovery']:,.0f} represents actual cash that can be freed "
+            f"({recovery['recovery_rate']:.1f}% of total DIO value). Excludes recognized losses requiring write-offs.",
+            recovery_note_style
+        ))
+
     # --- FOOTER ---
     elements.append(Spacer(1, 0.15*inch))
 
@@ -409,14 +481,25 @@ def build_diagnostic_data(data):
         'MILESTONE_ACHIEVED_NOT_BILLED': {'component': 'DSO', 'priority': 'HIGH', 'title': 'Progress Billing Not Triggered'},
         'PENDING_CUSTOMER_ACCEPTANCE': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Customer Acceptance Delays'},
         'RETAINAGE_ELIGIBLE_NOT_BILLED': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Retainage Not Billed'},
-        'RECEIVED_NOT_VALUED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Goods Receipt Without Valuation'},
-        'QUALITY_HOLD': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quality Hold Stall'},
-        'COUNT_VARIANCE_PENDING': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cycle Count Adjustments Pending'},
-        'STAGED_NOT_SHIPPED': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cross-Dock Staging Timeouts'},
-        'DAMAGED_RTV_PENDING': {'component': 'DIO', 'priority': 'LOW', 'title': 'RTV Authorization Delays'},
-        'RELEASED_NOT_STARTED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Work Order Release Delays'},
-        'AT_SUBCONTRACTOR': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Subcontract PO Delays'},
-        'QUARANTINE_PENDING_MRB': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quarantine Pending MRB'},
+        # DIO - Trapped Capital (Fully Recoverable)
+        'RECEIVED_NOT_VALUED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Goods Receipt Without Valuation', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'COUNT_VARIANCE_POSITIVE': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cycle Count Positive Variances', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'QUALITY_HOLD_RELEASABLE': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quality Hold (Releasable)', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'QUALITY_HOLD': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quality Hold Stall', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'RESERVED_CANCELLED_ORDER': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Ghost Allocations', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'STAGED_NOT_SHIPPED': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cross-Dock Staging Timeouts', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'RELEASED_NOT_STARTED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Work Order Release Delays', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'AT_SUBCONTRACTOR': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Subcontract PO Delays', 'recovery_type': 'TRAPPED_CAPITAL'},
+        # DIO - Partial Recovery (Liquidation)
+        'OBSOLETE_LIQUIDATION': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Obsolete Inventory (Liquidation)', 'recovery_type': 'PARTIAL_RECOVERY'},
+        # DIO - Recognized Losses
+        'COUNT_VARIANCE_NEGATIVE': {'component': 'DIO', 'priority': 'LOW', 'title': 'Cycle Count Negative Variances', 'recovery_type': 'RECOGNIZED_LOSS'},
+        'QUALITY_HOLD_FAILED': {'component': 'DIO', 'priority': 'LOW', 'title': 'Quality Hold (Failed)', 'recovery_type': 'RECOGNIZED_LOSS'},
+        'OBSOLETE_ZERO_VALUE': {'component': 'DIO', 'priority': 'LOW', 'title': 'Obsolete Inventory (Zero Value)', 'recovery_type': 'RECOGNIZED_LOSS'},
+        'DAMAGED_RTV_PENDING': {'component': 'DIO', 'priority': 'LOW', 'title': 'RTV Authorization Delays', 'recovery_type': 'RECOGNIZED_LOSS'},
+        # Legacy statuses
+        'COUNT_VARIANCE_PENDING': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cycle Count Adjustments Pending', 'recovery_type': 'TRAPPED_CAPITAL'},
+        'QUARANTINE_PENDING_MRB': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quarantine Pending MRB', 'recovery_type': 'TRAPPED_CAPITAL'},
         'MATCHING_EXCEPTION': {'component': 'DPO', 'priority': 'HIGH', 'title': 'PO Receipt Matching Failures'},
         'UNMATCHED_FREIGHT': {'component': 'DPO', 'priority': 'MEDIUM', 'title': 'Freight Invoice Backlog'},
         'PO_CHANGE_NOT_CLOSED': {'component': 'DPO', 'priority': 'HIGH', 'title': 'PO Change Order Not Closed'},
@@ -462,6 +545,12 @@ def build_diagnostic_data(data):
     # Take top 5 findings
     findings = findings[:5]
 
+    # Calculate DIO recovery analysis
+    dio_recovery = None
+    if dio_transactions:
+        transactions_df = pd.DataFrame(dio_transactions)
+        dio_recovery = calculate_dio_recovery(transactions_df)
+
     return {
         'company_name': company['company_name'],
         'analysis_date': metrics['calculation_date'] if metrics else company['analysis_date'],
@@ -472,6 +561,7 @@ def build_diagnostic_data(data):
             'ccc': metrics['ccc_value'] if metrics else 0
         },
         'total_recovery_potential': total_recovery,
+        'dio_recovery_analysis': dio_recovery,
         'findings': findings
     }
 

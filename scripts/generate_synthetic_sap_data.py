@@ -429,11 +429,15 @@ def generate_dio_transactions(company_id):
     event_logs = []
     inventory_movements = []
 
-    # Issue counts
+    # Issue counts - Updated to include cycle count variances
+    cycle_count_positive_count = 0  # Trapped capital
+    cycle_count_negative_count = 0  # Recognized losses
     gr_no_valuation_count = 0
-    quality_hold_count = 0
+    quality_hold_releasable_count = 0  # Trapped capital
+    quality_hold_failed_count = 0  # Loss (will be scrapped)
     ghost_allocation_count = 0
-    obsolete_count = 0
+    obsolete_liquidation_count = 0  # Partial recovery
+    obsolete_zero_value_count = 0  # Total loss
 
     material_types = ['ELECTRONICS', 'RAW_MATERIALS', 'COMPONENTS', 'FINISHED_GOODS', 'PACKAGING']
     vendors = [fake.company() for _ in range(20)]
@@ -461,14 +465,177 @@ def generate_dio_transactions(company_id):
             "unit_price": unit_price
         }
 
-        # Inject Issue #1: Goods receipt without valuation (87 items)
-        if (gr_no_valuation_count < 87 and
+        # Inject Issue #1: Cycle count variances (200 items: 127 positive, 73 negative)
+        # Positive variances = trapped capital (inventory exists but not in system)
+        # Negative variances = recognized losses (inventory gone - shrinkage/theft)
+        if cycle_count_positive_count < 127 and random.random() < 0.18:
+            status = "COUNT_VARIANCE_POSITIVE"
+            cycle_count_positive_count += 1
+
+            # System quantity vs physical quantity
+            system_qty = quantity
+            variance_qty = random.randint(5, max(5, int(quantity * 0.15)))  # 5-15% overage
+            actual_qty = system_qty + variance_qty
+            variance_value = round(variance_qty * unit_price, 2)
+
+            # For positive variances, amount represents the trapped capital (variance value)
+            amount = variance_value
+
+            erp_metadata.update({
+                "system_qty": system_qty,
+                "counted_qty": actual_qty,
+                "variance_qty": variance_qty,
+                "variance_value": variance_value,
+                "variance_type": "OVERAGE",
+                "recovery_category": "TRAPPED_CAPITAL",
+                "recovery_potential": variance_value,
+                "root_cause": "Goods receipts posted without valuation or found during physical count"
+            })
+
+            # Original receipt event
+            event_logs.append({
+                'event_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'transaction_id': trans_id,
+                'event_type': 'GOODS_RECEIPT',
+                'event_timestamp': trans_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'user_id': 'RECEIVING',
+                'module': 'MM',
+                'event_description': 'Goods received from vendor',
+                'event_data': json.dumps({'quantity': system_qty, 'vendor': vendor, 'material': material_id})
+            })
+
+            # Cycle count event showing positive variance
+            count_date = trans_date + timedelta(days=random.randint(30, 90))
+            event_logs.append({
+                'event_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'transaction_id': trans_id,
+                'event_type': 'CYCLE_COUNT_VARIANCE',
+                'event_timestamp': count_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'user_id': 'CYCLE_COUNTER',
+                'module': 'MM',
+                'event_description': 'Positive variance detected - physical count exceeds system',
+                'event_data': json.dumps({
+                    'system_qty': system_qty,
+                    'physical_qty': actual_qty,
+                    'variance_qty': variance_qty,
+                    'variance_value': variance_value,
+                    'variance_type': 'OVERAGE'
+                })
+            })
+            # MISSING: ADJUSTMENT_POSTED event - variance not posted
+
+            inventory_movements.append({
+                'movement_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'material_id': material_id,
+                'movement_date': trans_date.strftime('%Y-%m-%d'),
+                'movement_type': 'GOODS_RECEIPT',
+                'quantity': system_qty,
+                'amount': amount,
+                'reason_code': 'GR',
+                'document_number': f'45{random.randint(10000000, 99999999)}'
+            })
+
+        elif cycle_count_negative_count < 73 and random.random() < 0.11:
+            status = "COUNT_VARIANCE_NEGATIVE"
+            cycle_count_negative_count += 1
+
+            # System quantity vs physical quantity
+            system_qty = quantity
+            variance_qty = random.randint(5, max(5, int(quantity * 0.12)))  # 5-12% shortage
+            actual_qty = system_qty - variance_qty
+            variance_value = round(variance_qty * unit_price, 2)
+
+            # For negative variances, amount represents the loss value (variance value as positive)
+            amount = variance_value
+
+            erp_metadata.update({
+                "system_qty": system_qty,
+                "counted_qty": actual_qty,
+                "variance_qty": -variance_qty,
+                "variance_value": -variance_value,
+                "variance_type": "SHORTAGE",
+                "recovery_category": "RECOGNIZED_LOSS",
+                "recovery_potential": 0,
+                "root_cause": "Shrinkage/theft - physical inventory missing, unrecorded consumption"
+            })
+
+            # Original receipt event
+            event_logs.append({
+                'event_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'transaction_id': trans_id,
+                'event_type': 'GOODS_RECEIPT',
+                'event_timestamp': trans_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'user_id': 'RECEIVING',
+                'module': 'MM',
+                'event_description': 'Goods received from vendor',
+                'event_data': json.dumps({'quantity': system_qty, 'vendor': vendor, 'material': material_id})
+            })
+
+            # Valuation posted
+            event_logs.append({
+                'event_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'transaction_id': trans_id,
+                'event_type': 'VALUATION_POSTED',
+                'event_timestamp': (trans_date + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                'user_id': 'SYSTEM_AUTO',
+                'module': 'MM',
+                'event_description': 'Inventory valuation posted',
+                'event_data': json.dumps({'amount': amount})
+            })
+
+            # Cycle count event showing negative variance
+            count_date = trans_date + timedelta(days=random.randint(30, 90))
+            event_logs.append({
+                'event_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'transaction_id': trans_id,
+                'event_type': 'CYCLE_COUNT_VARIANCE',
+                'event_timestamp': count_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'user_id': 'CYCLE_COUNTER',
+                'module': 'MM',
+                'event_description': 'Negative variance detected - physical count less than system',
+                'event_data': json.dumps({
+                    'system_qty': system_qty,
+                    'physical_qty': actual_qty,
+                    'variance_qty': -variance_qty,
+                    'variance_value': -variance_value,
+                    'variance_type': 'SHORTAGE'
+                })
+            })
+            # MISSING: ADJUSTMENT_POSTED event - loss not written off
+
+            inventory_movements.append({
+                'movement_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'material_id': material_id,
+                'movement_date': trans_date.strftime('%Y-%m-%d'),
+                'movement_type': 'GOODS_RECEIPT',
+                'quantity': system_qty,
+                'amount': amount,
+                'reason_code': 'GR',
+                'document_number': f'45{random.randint(10000000, 99999999)}'
+            })
+
+        # Inject Issue #2: Goods receipt without valuation (87 items)
+        elif (gr_no_valuation_count < 87 and
             trans_date >= GR_VALUATION_ISSUE_START and
             trans_date < GR_VALUATION_ISSUE_START + timedelta(days=60)):
 
             status = "RECEIVED_NOT_VALUED"
+            trapped_value = round(quantity * unit_price, 2)  # The value that should be posted
             amount = 0.0  # No valuation posted
             gr_no_valuation_count += 1
+
+            erp_metadata.update({
+                "recovery_category": "TRAPPED_CAPITAL",
+                "recovery_potential": trapped_value,
+                "root_cause": "Goods receipt posted but valuation workflow broken after system upgrade"
+            })
 
             # Event log: Goods receipt but NO valuation event
             event_logs.append({
@@ -480,7 +647,7 @@ def generate_dio_transactions(company_id):
                 'user_id': 'RECEIVING',
                 'module': 'MM',
                 'event_description': 'Goods received from vendor',
-                'event_data': json.dumps({'quantity': quantity, 'vendor': vendor, 'material': material_id})
+                'event_data': json.dumps({'quantity': quantity, 'vendor': vendor, 'material': material_id, 'expected_value': trapped_value})
             })
             # MISSING: VALUATION_POSTED event
 
@@ -496,12 +663,19 @@ def generate_dio_transactions(company_id):
                 'document_number': f'45{random.randint(10000000, 99999999)}'
             })
 
-        # Inject Issue #2: Quality hold stall (43 items)
-        elif quality_hold_count < 43 and random.random() < 0.06:
-            status = "QUALITY_HOLD"
-            quality_hold_count += 1
+        # Inject Issue #3: Quality hold - split into releasable (30) and failed (13)
+        elif quality_hold_releasable_count < 30 and random.random() < 0.045:
+            status = "QUALITY_HOLD_RELEASABLE"
+            quality_hold_releasable_count += 1
 
             hold_date = trans_date + timedelta(days=2)
+
+            erp_metadata.update({
+                "recovery_category": "TRAPPED_CAPITAL",
+                "recovery_potential": amount,
+                "inspection_status": "PENDING_RELEASE",
+                "root_cause": "QA inspection backlog - items will pass but stuck in queue"
+            })
 
             event_logs.extend([
                 {
@@ -534,10 +708,10 @@ def generate_dio_transactions(company_id):
                     'event_timestamp': hold_date.strftime('%Y-%m-%d %H:%M:%S'),
                     'user_id': 'QA_INSPECTOR',
                     'module': 'QM',
-                    'event_description': 'Quality inspection hold applied',
-                    'event_data': json.dumps({'reason': 'INSPECTION_REQUIRED', 'hold_hours': (ANALYSIS_DATE - hold_date).total_seconds() / 3600})
+                    'event_description': 'Quality inspection hold applied - will pass',
+                    'event_data': json.dumps({'reason': 'INSPECTION_REQUIRED', 'hold_hours': (ANALYSIS_DATE - hold_date).total_seconds() / 3600, 'expected_result': 'PASS'})
                 }
-                # MISSING: QUALITY_RELEASED event - stuck >48 hours
+                # MISSING: QUALITY_RELEASED event - stuck in inspection backlog
             ])
 
             inventory_movements.append({
@@ -552,12 +726,83 @@ def generate_dio_transactions(company_id):
                 'document_number': f'45{random.randint(10000000, 99999999)}'
             })
 
-        # Inject Issue #3: Ghost allocations (28 items)
+        elif quality_hold_failed_count < 13 and random.random() < 0.02:
+            status = "QUALITY_HOLD_FAILED"
+            quality_hold_failed_count += 1
+
+            hold_date = trans_date + timedelta(days=2)
+            scrap_value = round(amount * 0.15, 2)  # 15% scrap value
+
+            erp_metadata.update({
+                "recovery_category": "RECOGNIZED_LOSS",
+                "recovery_potential": scrap_value,
+                "write_down_required": amount - scrap_value,
+                "inspection_status": "FAILED",
+                "root_cause": "Quality inspection failure - items must be scrapped"
+            })
+
+            event_logs.extend([
+                {
+                    'event_id': str(uuid.uuid4()),
+                    'company_id': company_id,
+                    'transaction_id': trans_id,
+                    'event_type': 'GOODS_RECEIPT',
+                    'event_timestamp': trans_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    'user_id': 'RECEIVING',
+                    'module': 'MM',
+                    'event_description': 'Goods received from vendor',
+                    'event_data': json.dumps({'quantity': quantity, 'vendor': vendor})
+                },
+                {
+                    'event_id': str(uuid.uuid4()),
+                    'company_id': company_id,
+                    'transaction_id': trans_id,
+                    'event_type': 'VALUATION_POSTED',
+                    'event_timestamp': (trans_date + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                    'user_id': 'SYSTEM_AUTO',
+                    'module': 'MM',
+                    'event_description': 'Inventory valuation posted',
+                    'event_data': json.dumps({'amount': amount})
+                },
+                {
+                    'event_id': str(uuid.uuid4()),
+                    'company_id': company_id,
+                    'transaction_id': trans_id,
+                    'event_type': 'QUALITY_HOLD_APPLIED',
+                    'event_timestamp': hold_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    'user_id': 'QA_INSPECTOR',
+                    'module': 'QM',
+                    'event_description': 'Quality inspection failed - must scrap',
+                    'event_data': json.dumps({'reason': 'DIMENSIONAL_VARIANCE', 'hold_hours': (ANALYSIS_DATE - hold_date).total_seconds() / 3600, 'disposition': 'SCRAP', 'scrap_value': scrap_value})
+                }
+                # MISSING: SCRAP_POSTED event - loss not written off
+            ])
+
+            inventory_movements.append({
+                'movement_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'material_id': material_id,
+                'movement_date': trans_date.strftime('%Y-%m-%d'),
+                'movement_type': 'GOODS_RECEIPT',
+                'quantity': quantity,
+                'amount': amount,
+                'reason_code': 'GR',
+                'document_number': f'45{random.randint(10000000, 99999999)}'
+            })
+
+        # Inject Issue #4: Ghost allocations (28 items) - trapped capital
         elif ghost_allocation_count < 28 and random.random() < 0.04:
             status = "RESERVED_CANCELLED_ORDER"
             ghost_allocation_count += 1
 
             cancelled_order = f'SO-2024-{random.randint(10000, 99999)}'
+
+            erp_metadata.update({
+                "recovery_category": "TRAPPED_CAPITAL",
+                "recovery_potential": amount,
+                "cancelled_order": cancelled_order,
+                "root_cause": "Order cancelled but reservation not released - inventory exists but locked"
+            })
 
             event_logs.extend([
                 {
@@ -619,10 +864,24 @@ def generate_dio_transactions(company_id):
                 'document_number': f'45{random.randint(10000000, 99999999)}'
             })
 
-        # Inject Issue #4: Obsolete inventory (34 items, no movement >180 days)
-        elif obsolete_count < 34 and trans_date < ANALYSIS_DATE - timedelta(days=180):
-            status = "OBSOLETE"
-            obsolete_count += 1
+        # Inject Issue #5: Obsolete inventory - split into liquidation (20) and zero value (14)
+        elif obsolete_liquidation_count < 20 and trans_date < ANALYSIS_DATE - timedelta(days=180):
+            status = "OBSOLETE_LIQUIDATION"
+            obsolete_liquidation_count += 1
+
+            # Liquidation value: 60-75% of cost
+            liquidation_rate = random.uniform(0.60, 0.75)
+            liquidation_value = round(amount * liquidation_rate, 2)
+            write_down = amount - liquidation_value
+
+            erp_metadata.update({
+                "recovery_category": "PARTIAL_RECOVERY",
+                "recovery_potential": liquidation_value,
+                "write_down_required": write_down,
+                "liquidation_rate": round(liquidation_rate, 2),
+                "days_no_movement": (ANALYSIS_DATE - trans_date).days,
+                "root_cause": "Slow-moving inventory - can liquidate at discount"
+            })
 
             event_logs.extend([
                 {
@@ -647,7 +906,57 @@ def generate_dio_transactions(company_id):
                     'event_description': 'Inventory valuation posted',
                     'event_data': json.dumps({'amount': amount})
                 }
-                # NO SUBSEQUENT MOVEMENT - obsolete
+                # NO SUBSEQUENT MOVEMENT - can be liquidated
+            ])
+
+            inventory_movements.append({
+                'movement_id': str(uuid.uuid4()),
+                'company_id': company_id,
+                'material_id': material_id,
+                'movement_date': trans_date.strftime('%Y-%m-%d'),
+                'movement_type': 'GOODS_RECEIPT',
+                'quantity': quantity,
+                'amount': amount,
+                'reason_code': 'GR',
+                'document_number': f'45{random.randint(10000000, 99999999)}'
+            })
+
+        elif obsolete_zero_value_count < 14 and trans_date < ANALYSIS_DATE - timedelta(days=240):
+            status = "OBSOLETE_ZERO_VALUE"
+            obsolete_zero_value_count += 1
+
+            erp_metadata.update({
+                "recovery_category": "RECOGNIZED_LOSS",
+                "recovery_potential": 0,
+                "write_down_required": amount,
+                "days_no_movement": (ANALYSIS_DATE - trans_date).days,
+                "root_cause": "Obsolete technology or expired - zero liquidation value"
+            })
+
+            event_logs.extend([
+                {
+                    'event_id': str(uuid.uuid4()),
+                    'company_id': company_id,
+                    'transaction_id': trans_id,
+                    'event_type': 'GOODS_RECEIPT',
+                    'event_timestamp': trans_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    'user_id': 'RECEIVING',
+                    'module': 'MM',
+                    'event_description': 'Goods received from vendor',
+                    'event_data': json.dumps({'quantity': quantity, 'vendor': vendor})
+                },
+                {
+                    'event_id': str(uuid.uuid4()),
+                    'company_id': company_id,
+                    'transaction_id': trans_id,
+                    'event_type': 'VALUATION_POSTED',
+                    'event_timestamp': (trans_date + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S'),
+                    'user_id': 'SYSTEM_AUTO',
+                    'module': 'MM',
+                    'event_description': 'Inventory valuation posted',
+                    'event_data': json.dumps({'amount': amount})
+                }
+                # NO SUBSEQUENT MOVEMENT - completely obsolete
             ])
 
             inventory_movements.append({
@@ -761,10 +1070,17 @@ def generate_dio_transactions(company_id):
         })
 
     print(f"   ✓ Generated {len(transactions)} DIO transactions")
+    print(f"      TRAPPED CAPITAL (Fully Recoverable):")
+    print(f"      - Cycle count positive variances: {cycle_count_positive_count} items")
     print(f"      - GR without valuation: {gr_no_valuation_count} items")
-    print(f"      - Quality hold stall: {quality_hold_count} items")
+    print(f"      - Quality hold (releasable): {quality_hold_releasable_count} items")
     print(f"      - Ghost allocations: {ghost_allocation_count} items")
-    print(f"      - Obsolete inventory: {obsolete_count} items")
+    print(f"      PARTIAL RECOVERY (Liquidation):")
+    print(f"      - Obsolete inventory (liquidation): {obsolete_liquidation_count} items")
+    print(f"      RECOGNIZED LOSSES (Write-offs Required):")
+    print(f"      - Cycle count negative variances: {cycle_count_negative_count} items")
+    print(f"      - Quality hold (failed): {quality_hold_failed_count} items")
+    print(f"      - Obsolete inventory (zero value): {obsolete_zero_value_count} items")
     print(f"   ✓ Generated {len(event_logs)} DIO event logs")
     print(f"   ✓ Generated {len(inventory_movements)} inventory movements")
 
