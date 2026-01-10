@@ -26,6 +26,8 @@ load_dotenv()
 
 # Import recovery analysis
 from utils.recovery_analysis import calculate_dio_recovery
+from utils.dio_trapped_capital_unified import DIOTrappedCapitalCalculator
+from utils.company_type_detector import detect_company_type
 
 
 class ColoredBox(Flowable):
@@ -173,6 +175,31 @@ def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/d
 
     elements.append(Paragraph(diagnostic_data['company_name'], company_name_style))
     elements.append(Paragraph(f"Analysis Date: {diagnostic_data['analysis_date']}", subtitle_style))
+
+    # Add company type and methodology badge
+    company_type = diagnostic_data.get('company_type', 'UNKNOWN')
+    methodology = diagnostic_data.get('methodology', 'Standard Analysis')
+
+    type_badge_style = ParagraphStyle(
+        'TypeBadge',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.HexColor('#0066CC'),
+        fontName='Helvetica-Bold',
+        spaceAfter=2
+    )
+
+    methodology_style = ParagraphStyle(
+        'Methodology',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.HexColor('#666666'),
+        fontName='Helvetica-Oblique',
+        spaceAfter=4
+    )
+
+    elements.append(Paragraph(f"Company Type: {company_type}", type_badge_style))
+    elements.append(Paragraph(f"Methodology: {methodology}", methodology_style))
     elements.append(Paragraph("Surgical Analysis of ERP Event Logs", tagline_style))
 
     # --- EXECUTIVE SUMMARY BOX ---
@@ -352,6 +379,79 @@ def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/d
         elements.append(Paragraph(
             f"<b>Net Recovery:</b> ${recovery['net_recovery']:,.0f} represents actual cash that can be freed "
             f"({recovery['recovery_rate']:.1f}% of total DIO value). Excludes recognized losses requiring write-offs.",
+            recovery_note_style
+        ))
+
+    # --- COMPONENT CASCADE (Manufacturing Only) ---
+    if diagnostic_data.get('component_cascade') and len(diagnostic_data['component_cascade']) > 0:
+        elements.append(Spacer(1, 0.12*inch))
+
+        cascade_header_style = ParagraphStyle(
+            'CascadeHeader',
+            parent=styles['Heading2'],
+            fontSize=10,
+            textColor=colors.HexColor('#DC3545'),
+            spaceAfter=6,
+            fontName='Helvetica-Bold'
+        )
+        elements.append(Paragraph("COMPONENT SHORTAGE CASCADE ANALYSIS", cascade_header_style))
+
+        cascade_note_style = ParagraphStyle(
+            'CascadeNote',
+            parent=styles['Normal'],
+            fontSize=7,
+            textColor=colors.HexColor('#666666'),
+            fontName='Helvetica-Oblique',
+            spaceAfter=4
+        )
+        elements.append(Paragraph(
+            "Single component shortages impact multiple work orders. Root cause analysis shows:",
+            cascade_note_style
+        ))
+
+        # Build cascade table with top 3 component shortages
+        cascade_data = [['Component', 'Lead Time', 'WOs Affected', 'Total Trapped']]
+
+        sorted_components = sorted(
+            diagnostic_data['component_cascade'].items(),
+            key=lambda x: x[1]['total_trapped'],
+            reverse=True
+        )[:3]  # Top 3
+
+        for comp_name, comp_data in sorted_components:
+            cascade_data.append([
+                comp_name,
+                f"{comp_data['lead_time']} days",
+                str(len(comp_data['work_orders_affected'])),
+                format_currency_millions(comp_data['total_trapped'])
+            ])
+
+        cascade_table = Table(cascade_data, colWidths=[2.0*inch, 1.3*inch, 1.3*inch, 1.4*inch])
+        cascade_table.setStyle(TableStyle([
+            # Header row
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DC3545')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            # Data rows
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            # Borders
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CCCCCC')),
+            ('BOX', (0, 0), (-1, -1), 1.5, colors.HexColor('#DC3545')),
+            ('PADDING', (0, 0), (-1, -1), 5),
+        ]))
+
+        elements.append(cascade_table)
+        elements.append(Spacer(1, 0.05*inch))
+
+        elements.append(Paragraph(
+            "<b>System Issue:</b> Work orders released without component availability checks. "
+            "Recommend: Configure 'Check Material Availability = YES' before release.",
             recovery_note_style
         ))
 
@@ -545,14 +645,61 @@ def build_diagnostic_data(data):
     # Take top 5 findings
     findings = findings[:5]
 
-    # Calculate DIO recovery analysis
+    # Calculate DIO recovery analysis using unified calculator
     dio_recovery = None
+    company_type = 'UNKNOWN'
+    methodology = 'Standard Analysis'
+    component_cascade = None
+
     if dio_transactions:
-        transactions_df = pd.DataFrame(dio_transactions)
-        dio_recovery = calculate_dio_recovery(transactions_df)
+        try:
+            # Use the unified DIO calculator
+            from datetime import datetime
+            analysis_date = datetime.fromisoformat(metrics['calculation_date'] if metrics else company['analysis_date'])
+
+            calculator = DIOTrappedCapitalCalculator(company['company_id'], analysis_date)
+            full_results = calculator.calculate_trapped_capital()
+
+            # Extract summary for PDF
+            dio_recovery = {
+                'total_value': full_results.get('total_dio_value', 0),
+                'trapped_capital': full_results.get('trapped_capital', 0),
+                'partial_recovery': full_results.get('partial_recovery_amount', 0),
+                'recognized_losses': full_results.get('recognized_losses', 0),
+                'net_recovery': full_results.get('net_recovery', 0),
+                'recovery_rate': full_results.get('recovery_rate', 0),
+                'breakdown_by_status': {}  # Could add detailed breakdown if needed
+            }
+
+            # Get company type and methodology
+            company_type = full_results.get('company_type', 'UNKNOWN')
+            methodology = full_results.get('methodology', 'Standard Analysis')
+
+            # Get component cascade for manufacturing
+            if company_type == 'MANUFACTURING':
+                component_cascade = full_results.get('component_cascade_analysis', {})
+
+        except Exception as e:
+            print(f"   ⚠ Warning: Could not use unified calculator: {e}")
+            print(f"   → Falling back to legacy recovery analysis")
+            # Fallback to legacy calculator
+            transactions_df = pd.DataFrame(dio_transactions)
+            dio_recovery = calculate_dio_recovery(transactions_df)
+
+            # Try to detect company type from company data
+            try:
+                company_type = company.get('company_type', 'UNKNOWN')
+                if company_type == 'DISTRIBUTION':
+                    methodology = 'Velocity-based time benchmarks (hours/days)'
+                elif company_type == 'MANUFACTURING':
+                    methodology = 'BOM critical path analysis with component availability verification'
+            except:
+                pass
 
     return {
         'company_name': company['company_name'],
+        'company_type': company_type,
+        'methodology': methodology,
         'analysis_date': metrics['calculation_date'] if metrics else company['analysis_date'],
         'ccc_metrics': {
             'dso': metrics['dso_value'] if metrics else 0,
@@ -562,6 +709,7 @@ def build_diagnostic_data(data):
         },
         'total_recovery_potential': total_recovery,
         'dio_recovery_analysis': dio_recovery,
+        'component_cascade': component_cascade,
         'findings': findings
     }
 

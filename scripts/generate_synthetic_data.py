@@ -24,6 +24,7 @@ import random
 import os
 import argparse
 from pathlib import Path
+from manufacturing_data_generator import ManufacturingDataGenerator
 
 # Set random seed for reproducibility
 RANDOM_SEED = 42
@@ -270,9 +271,14 @@ class SyntheticDataGenerator:
 
         company_id = str(uuid.uuid4())
 
+        # Determine company type based on dataset
+        company_type = 'DISTRIBUTION' if self.dataset_name == 'infor' else 'MANUFACTURING'
+
         df = pd.DataFrame([{
             'company_id': company_id,
             'company_name': self.config['company_name'],
+            'company_type': company_type,
+            'industry': self.config['industry'],
             'erp_system': self.config['erp_system'],
             'revenue_annual': self.config['annual_revenue'],
             'analysis_date': ANALYSIS_DATE.strftime('%Y-%m-%d')
@@ -281,6 +287,8 @@ class SyntheticDataGenerator:
         output_path = self.output_dir / "companies.csv"
         df.to_csv(output_path, index=False)
         print(f"   ✓ Created {output_path} (1 row)")
+        print(f"      - Company Type: {company_type}")
+        print(f"      - Industry: {self.config['industry']}")
 
         return company_id
 
@@ -1567,7 +1575,7 @@ class SyntheticDataGenerator:
 
         print(f"   ✓ Created {output_path} ({len(details)} rows)")
 
-    def save_transactions(self, all_transactions, all_events, inventory_movements, purchase_orders):
+    def save_transactions(self, all_transactions, all_events, inventory_movements, purchase_orders, manufacturing_data=None):
         """Save all transaction data to CSV files"""
         print("\n[7/7] Saving transaction files...")
 
@@ -1595,6 +1603,58 @@ class SyntheticDataGenerator:
         po_df.to_csv(po_output, index=False)
         print(f"   ✓ Created {po_output} ({len(purchase_orders)} rows)")
 
+        # Save manufacturing-specific data if provided
+        if manufacturing_data:
+            print("\n   [Manufacturing Data]")
+
+            # BOM structures
+            bom_df = pd.DataFrame(manufacturing_data['bom_structures'])
+            bom_output = self.output_dir / "bom_structure.csv"
+            bom_df.to_csv(bom_output, index=False)
+            print(f"   ✓ Created {bom_output} ({len(manufacturing_data['bom_structures'])} rows)")
+
+            # BOM components
+            comp_df = pd.DataFrame(manufacturing_data['bom_components'])
+            comp_output = self.output_dir / "bom_components.csv"
+            comp_df.to_csv(comp_output, index=False)
+            print(f"   ✓ Created {comp_output} ({len(manufacturing_data['bom_components'])} rows)")
+
+            # Work orders
+            wo_df = pd.DataFrame(manufacturing_data['work_orders'])
+            wo_output = self.output_dir / "work_orders.csv"
+            wo_df.to_csv(wo_output, index=False)
+            print(f"   ✓ Created {wo_output} ({len(manufacturing_data['work_orders'])} rows)")
+
+            # Component availability snapshots
+            snap_df = pd.DataFrame(manufacturing_data['component_snapshots'])
+            snap_output = self.output_dir / "component_availability_snapshots.csv"
+            snap_df.to_csv(snap_output, index=False)
+            print(f"   ✓ Created {snap_output} ({len(manufacturing_data['component_snapshots'])} rows)")
+
+            # Component shortages
+            short_df = pd.DataFrame(manufacturing_data['component_shortages'])
+            short_output = self.output_dir / "component_shortages.csv"
+            short_df.to_csv(short_output, index=False)
+            print(f"   ✓ Created {short_output} ({len(manufacturing_data['component_shortages'])} rows)")
+
+            # Inventory snapshots
+            inv_snap_df = pd.DataFrame(manufacturing_data['inventory_snapshots'])
+            inv_snap_output = self.output_dir / "inventory_snapshots.csv"
+            inv_snap_df.to_csv(inv_snap_output, index=False)
+            print(f"   ✓ Created {inv_snap_output} ({len(manufacturing_data['inventory_snapshots'])} rows)")
+
+            # Subcontract items
+            sub_df = pd.DataFrame(manufacturing_data['subcontract_items'])
+            sub_output = self.output_dir / "subcontract_items.csv"
+            sub_df.to_csv(sub_output, index=False)
+            print(f"   ✓ Created {sub_output} ({len(manufacturing_data['subcontract_items'])} rows)")
+
+            # Quarantine items
+            quar_df = pd.DataFrame(manufacturing_data['quarantine_items'])
+            quar_output = self.output_dir / "quarantine_items.csv"
+            quar_df.to_csv(quar_output, index=False)
+            print(f"   ✓ Created {quar_output} ({len(manufacturing_data['quarantine_items'])} rows)")
+
     def generate(self):
         """Main generation function"""
         # Generate company
@@ -1609,12 +1669,43 @@ class SyntheticDataGenerator:
         # Generate DPO transactions and events
         dpo_trans, dpo_events, purchase_orders = self.generate_dpo_transactions(company_id)
 
+        # Generate manufacturing-specific data for SAP and Oracle
+        manufacturing_data = None
+        if self.dataset_name in ['sap', 'oracle']:
+            print("\n" + "="*80)
+            print("GENERATING MANUFACTURING-SPECIFIC DATA")
+            print("="*80)
+
+            mfg_generator = ManufacturingDataGenerator(self.dataset_name, self.config, ANALYSIS_DATE)
+
+            # Generate BOMs and work orders
+            (bom_structures, bom_components, work_orders, component_snapshots,
+             component_shortages, inventory_snapshots) = mfg_generator.generate_bom_and_work_orders(company_id)
+
+            # Generate subcontract items
+            subcontract_items = mfg_generator.generate_subcontract_items(company_id)
+
+            # Generate quarantine items
+            quarantine_items = mfg_generator.generate_quarantine_items(company_id)
+
+            # Package all manufacturing data
+            manufacturing_data = {
+                'bom_structures': bom_structures,
+                'bom_components': bom_components,
+                'work_orders': work_orders,
+                'component_snapshots': component_snapshots,
+                'component_shortages': component_shortages,
+                'inventory_snapshots': inventory_snapshots,
+                'subcontract_items': subcontract_items,
+                'quarantine_items': quarantine_items
+            }
+
         # Combine all transactions
         all_transactions = dso_trans + dio_trans + dpo_trans
         all_events = dso_events + dio_events + dpo_events
 
         # Save transaction files
-        self.save_transactions(all_transactions, all_events, inventory_movements, purchase_orders)
+        self.save_transactions(all_transactions, all_events, inventory_movements, purchase_orders, manufacturing_data)
 
         # Calculate CCC metrics
         self.calculate_ccc_metrics(company_id, all_transactions)
