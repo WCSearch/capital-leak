@@ -13,7 +13,15 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.platypus.flowables import Flowable
 from reportlab.pdfgen import canvas
 from datetime import datetime
+from pathlib import Path
 import os
+import sys
+import argparse
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class ColoredBox(Flowable):
@@ -301,102 +309,241 @@ def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/d
     return output_path
 
 
-if __name__ == "__main__":
-    # Sample data for testing
-    diagnostic_data = {
-        'company_name': 'TechMfg Industries',
-        'analysis_date': '2025-01-07',
-        'ccc_metrics': {
-            'dso': 85.2,
-            'dio': 588.9,
-            'dpo': 45.3,
-            'ccc': 628.8
-        },
-        'total_recovery_potential': 156700000,  # $156.7M
-        'findings': [
-            {
-                'component': 'DSO',
-                'priority': 'HIGH',
-                'issue_title': 'Billing Trigger Disabled',
-                'amount_at_risk': 18500000,
-                'days_impact': 143,
-                'transaction_count': 143,
-                'root_cause': 'SD module billing trigger disabled on 2024-03-17, preventing automated invoice generation for fulfilled orders',
-                'example_transaction': {
-                    'transaction_number': 'INV-2024-000543',
-                    'amount': 127450.00,
-                    'days_outstanding': 287,
-                    'status': 'FULFILLED_NOT_BILLED',
-                    'key_events': [
-                        '2024-03-19: Order created',
-                        '2024-03-20: Goods shipped',
-                        'MISSING: Invoice generation event'
-                    ]
-                }
-            },
-            {
-                'component': 'DSO',
-                'priority': 'MEDIUM',
-                'issue_title': 'Approval Workflow Bottleneck',
-                'amount_at_risk': 4200000,
-                'days_impact': 31,
-                'transaction_count': 31,
-                'root_cause': 'Approver BWILSON left company on 2024-06-15, leaving 31 invoices stuck in approval queue',
-                'example_transaction': {
-                    'transaction_number': 'INV-2024-001247',
-                    'amount': 143200.00,
-                    'days_outstanding': 198,
-                    'status': 'PENDING_APPROVAL',
-                    'key_events': [
-                        '2024-06-10: Order created',
-                        '2024-06-13: Goods shipped',
-                        '2024-06-14: Invoice generated',
-                        '2024-06-14: Approval assigned to BWILSON',
-                        'MISSING: Approval event (BWILSON departed 2024-06-15)'
-                    ]
-                }
-            },
-            {
-                'component': 'DIO',
-                'priority': 'HIGH',
-                'issue_title': 'Goods Receipt Without Valuation',
-                'amount_at_risk': 0,  # No value because valuation never posted
-                'days_impact': 87,
-                'transaction_count': 87,
-                'root_cause': 'MM module failed to post valuations for goods receipts starting 2024-05-12, creating invisible inventory',
-                'example_transaction': {
-                    'transaction_number': 'MAT-487392',
-                    'amount': 0.00,
-                    'days_outstanding': 240,
-                    'status': 'RECEIVED_NOT_VALUED',
-                    'key_events': [
-                        '2024-05-14: Goods receipt posted (qty: 450)',
-                        'MISSING: Valuation posted event'
-                    ]
-                }
-            },
-            {
-                'component': 'DPO',
-                'priority': 'MEDIUM',
-                'issue_title': 'Approval Workflow Bottleneck',
-                'amount_at_risk': 7800000,
-                'days_impact': 56,
-                'transaction_count': 56,
-                'root_cause': 'Approver JSMITH left company on 2024-07-22, leaving 56 invoices stuck in approval queue',
-                'example_transaction': {
-                    'transaction_number': 'APINV-2024-001156',
-                    'amount': 156700.00,
-                    'days_outstanding': 169,
-                    'status': 'PENDING_APPROVAL',
-                    'key_events': [
-                        '2024-07-23: Invoice received from vendor',
-                        '2024-07-23: Approval assigned to JSMITH',
-                        'MISSING: Approval event (JSMITH departed 2024-07-22)'
-                    ]
-                }
-            }
-        ]
+def get_supabase_client() -> Client:
+    """Initialize Supabase client"""
+    try:
+        # Try to get from .streamlit/secrets.toml first
+        secrets_file = Path(".streamlit/secrets.toml")
+        if secrets_file.exists():
+            import toml
+            secrets = toml.load(secrets_file)
+            url = secrets.get('supabase', {}).get('url')
+            key = secrets.get('supabase', {}).get('service_role_key') or secrets.get('supabase', {}).get('key')
+        else:
+            url = os.getenv("NEXT_PUBLIC_SUPABASE_URL", "https://vlbvrhotrlipaoedudys.supabase.co")
+            # Prefer service role key for reading data (bypasses RLS)
+            key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "")
+
+        # Extract API URL from PostgreSQL connection string if needed
+        if url and url.startswith("postgresql://"):
+            # Format: postgresql://postgres:password@db.PROJECT_REF.supabase.co:5432/postgres
+            parts = url.split("@")
+            if len(parts) > 1:
+                host_part = parts[1].split(":")[0]  # db.PROJECT_REF.supabase.co
+                project_ref = host_part.replace("db.", "").replace(".supabase.co", "")
+                url = f"https://{project_ref}.supabase.co"
+
+        if not key or key == "YOUR_SERVICE_ROLE_KEY_HERE":
+            print("✗ Error: Supabase service role key not found")
+            print("  Please set SUPABASE_SERVICE_ROLE_KEY in .env file")
+            print("  Get it from: Supabase Dashboard → Settings → API → service_role key")
+            sys.exit(1)
+
+        client = create_client(url, key)
+        return client
+    except Exception as e:
+        print(f"✗ Failed to connect to Supabase: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def fetch_company_data(client: Client, company_id: str):
+    """Fetch company data from Supabase"""
+    try:
+        # Fetch company info
+        company_response = client.table('companies').select('*').eq('company_id', company_id).execute()
+        if not company_response.data:
+            print(f"✗ Company not found: {company_id}")
+            sys.exit(1)
+
+        company = company_response.data[0]
+
+        # Fetch CCC metrics
+        metrics_response = client.table('ccc_metrics').select('*').eq('company_id', company_id).execute()
+        metrics = metrics_response.data[0] if metrics_response.data else None
+
+        # Fetch transactions to analyze
+        transactions_response = client.table('transactions').select('*').eq('company_id', company_id).execute()
+        transactions = transactions_response.data
+
+        return {
+            'company': company,
+            'metrics': metrics,
+            'transactions': transactions
+        }
+    except Exception as e:
+        print(f"✗ Failed to fetch company data: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def build_diagnostic_data(data):
+    """Build diagnostic data structure from Supabase data"""
+    company = data['company']
+    metrics = data['metrics']
+    transactions = data['transactions']
+
+    # Analyze transactions to find issues
+    findings = []
+    dso_transactions = [t for t in transactions if t['component_type'] == 'DSO']
+    dio_transactions = [t for t in transactions if t['component_type'] == 'DIO']
+    dpo_transactions = [t for t in transactions if t['component_type'] == 'DPO']
+
+    # Group by status to find issues
+    status_groups = {}
+    for trans in transactions:
+        status = trans['status']
+        if status not in status_groups:
+            status_groups[status] = []
+        status_groups[status].append(trans)
+
+    # Build findings from problematic statuses
+    problem_statuses = {
+        'FULFILLED_NOT_BILLED': {'component': 'DSO', 'priority': 'HIGH', 'title': 'Billing Trigger Disabled'},
+        'PENDING_APPROVAL': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Approval Workflow Stuck'},
+        'CREDIT_HOLD': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Credit Holds'},
+        'PAYMENT_RECEIVED_NOT_APPLIED': {'component': 'DSO', 'priority': 'HIGH', 'title': 'Payment Application Delays'},
+        'UNAPPLIED_CASH': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Unapplied Cash'},
+        'MILESTONE_ACHIEVED_NOT_BILLED': {'component': 'DSO', 'priority': 'HIGH', 'title': 'Progress Billing Not Triggered'},
+        'PENDING_CUSTOMER_ACCEPTANCE': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Customer Acceptance Delays'},
+        'RETAINAGE_ELIGIBLE_NOT_BILLED': {'component': 'DSO', 'priority': 'MEDIUM', 'title': 'Retainage Not Billed'},
+        'RECEIVED_NOT_VALUED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Goods Receipt Without Valuation'},
+        'QUALITY_HOLD': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quality Hold Stall'},
+        'COUNT_VARIANCE_PENDING': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cycle Count Adjustments Pending'},
+        'STAGED_NOT_SHIPPED': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Cross-Dock Staging Timeouts'},
+        'DAMAGED_RTV_PENDING': {'component': 'DIO', 'priority': 'LOW', 'title': 'RTV Authorization Delays'},
+        'RELEASED_NOT_STARTED': {'component': 'DIO', 'priority': 'HIGH', 'title': 'Work Order Release Delays'},
+        'AT_SUBCONTRACTOR': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Subcontract PO Delays'},
+        'QUARANTINE_PENDING_MRB': {'component': 'DIO', 'priority': 'MEDIUM', 'title': 'Quarantine Pending MRB'},
+        'MATCHING_EXCEPTION': {'component': 'DPO', 'priority': 'HIGH', 'title': 'PO Receipt Matching Failures'},
+        'UNMATCHED_FREIGHT': {'component': 'DPO', 'priority': 'MEDIUM', 'title': 'Freight Invoice Backlog'},
+        'PO_CHANGE_NOT_CLOSED': {'component': 'DPO', 'priority': 'HIGH', 'title': 'PO Change Order Not Closed'},
+        'MILESTONE_NOT_CONFIRMED': {'component': 'DPO', 'priority': 'MEDIUM', 'title': 'Subcontractor Milestone Payments'},
+        'TERMS_MISMATCH_HOLD': {'component': 'DPO', 'priority': 'LOW', 'title': 'Supplier Terms Mismatch'},
+        'VARIANCE_HOLD': {'component': 'DPO', 'priority': 'MEDIUM', 'title': 'Variance Holds'},
+        'GR_IR_MISMATCH': {'component': 'DPO', 'priority': 'MEDIUM', 'title': 'GR/IR Mismatches'}
     }
 
+    total_recovery = 0
+    for status, info in problem_statuses.items():
+        if status in status_groups:
+            trans_list = status_groups[status]
+            amount_at_risk = sum(t.get('outstanding_amount', 0) or 0 for t in trans_list)
+
+            if amount_at_risk > 0 or len(trans_list) > 0:
+                # Get example transaction
+                example = trans_list[0] if trans_list else None
+
+                finding = {
+                    'component': info['component'],
+                    'priority': info['priority'],
+                    'issue_title': info['title'],
+                    'amount_at_risk': amount_at_risk,
+                    'days_impact': len(trans_list),
+                    'transaction_count': len(trans_list),
+                    'root_cause': f"{len(trans_list)} transactions in {status} status with ${amount_at_risk:,.2f} at risk",
+                    'example_transaction': {
+                        'transaction_number': example.get('transaction_number', 'N/A') if example else 'N/A',
+                        'amount': example.get('amount', 0) if example else 0,
+                        'days_outstanding': example.get('days_outstanding', 0) if example else 0,
+                        'status': status,
+                        'key_events': ['See event logs for details']
+                    } if example else None
+                }
+
+                findings.append(finding)
+                total_recovery += amount_at_risk
+
+    # Sort findings by amount at risk (descending)
+    findings.sort(key=lambda x: x['amount_at_risk'], reverse=True)
+
+    # Take top 5 findings
+    findings = findings[:5]
+
+    return {
+        'company_name': company['company_name'],
+        'analysis_date': metrics['calculation_date'] if metrics else company['analysis_date'],
+        'ccc_metrics': {
+            'dso': metrics['dso_value'] if metrics else 0,
+            'dio': metrics['dio_value'] if metrics else 0,
+            'dpo': metrics['dpo_value'] if metrics else 0,
+            'ccc': metrics['ccc_value'] if metrics else 0
+        },
+        'total_recovery_potential': total_recovery,
+        'findings': findings
+    }
+
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Generate WCSearch Working Capital Diagnostic PDF',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python generate_diagnostic_pdf.py --company-id f2c4b1b6-aab7-4ace-a050-8b0ee159c591
+  python generate_diagnostic_pdf.py --company-id 79d556f0-fb62-4988-95b0-43d490f39126 --output reports/infor_report.pdf
+        """
+    )
+
+    parser.add_argument(
+        '--company-id',
+        type=str,
+        required=True,
+        help='Company ID from Supabase'
+    )
+
+    parser.add_argument(
+        '--output',
+        type=str,
+        default=None,
+        help='Output PDF path (default: /mnt/user-data/outputs/<company_name>_diagnostic.pdf)'
+    )
+
+    args = parser.parse_args()
+
+    print("=" * 80)
+    print("WCSEARCH WORKING CAPITAL DIAGNOSTIC PDF GENERATOR")
+    print("=" * 80)
+    print(f"Company ID: {args.company_id}")
+    print("=" * 80)
+
+    # Connect to Supabase
+    print("\n[1/4] Connecting to Supabase...")
+    client = get_supabase_client()
+    print("   ✓ Connected")
+
+    # Fetch company data
+    print("\n[2/4] Fetching company data...")
+    data = fetch_company_data(client, args.company_id)
+    print(f"   ✓ Fetched data for: {data['company']['company_name']}")
+    print(f"   ✓ Transactions: {len(data['transactions'])}")
+
+    # Build diagnostic data
+    print("\n[3/4] Analyzing transactions...")
+    diagnostic_data = build_diagnostic_data(data)
+    print(f"   ✓ Found {len(diagnostic_data['findings'])} issues")
+    print(f"   ✓ Total recovery potential: {format_currency_millions(diagnostic_data['total_recovery_potential'])}")
+
     # Generate PDF
-    create_diagnostic_pdf(diagnostic_data, '/mnt/user-data/outputs/diagnostic_report.pdf')
+    print("\n[4/4] Generating PDF...")
+
+    # Determine output path
+    if args.output:
+        output_path = args.output
+    else:
+        # Create company-specific filename
+        company_name_slug = diagnostic_data['company_name'].lower().replace(' ', '_').replace('.', '')
+        output_path = f"/mnt/user-data/outputs/{company_name_slug}_diagnostic.pdf"
+
+    create_diagnostic_pdf(diagnostic_data, output_path)
+
+    print("\n" + "=" * 80)
+    print("✅ PDF GENERATION COMPLETE")
+    print("=" * 80)
+    print(f"\nCompany: {diagnostic_data['company_name']}")
+    print(f"Output: {output_path}")
+    print(f"Recovery Potential: {format_currency_millions(diagnostic_data['total_recovery_potential'])}")
+    print(f"Issues Found: {len(diagnostic_data['findings'])}")
