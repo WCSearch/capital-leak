@@ -64,7 +64,7 @@ def get_priority_color(priority):
         return colors.HexColor('#6C757D')  # Gray
 
 
-def create_diagnostic_pdf(diagnostic_data, output_path='/mnt/user-data/outputs/diagnostic_report.pdf'):
+def create_diagnostic_pdf(diagnostic_data, output_path='outputs/diagnostic_report.pdf'):
     """
     Generate a professional 1-page diagnostic PDF
 
@@ -499,7 +499,7 @@ Examples:
         '--output',
         type=str,
         default=None,
-        help='Output PDF path (default: /mnt/user-data/outputs/<company_name>_diagnostic.pdf)'
+        help='Output PDF path (default: outputs/<company_name>_diagnostic.pdf)'
     )
 
     args = parser.parse_args()
@@ -536,7 +536,7 @@ Examples:
     else:
         # Create company-specific filename
         company_name_slug = diagnostic_data['company_name'].lower().replace(' ', '_').replace('.', '')
-        output_path = f"/mnt/user-data/outputs/{company_name_slug}_diagnostic.pdf"
+        output_path = f"outputs/{company_name_slug}_diagnostic.pdf"
 
     create_diagnostic_pdf(diagnostic_data, output_path)
 
